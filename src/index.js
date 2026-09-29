@@ -1,5 +1,4 @@
 import { sendPushNotification } from '@mmmike/web-push/send';
-import { generateVapidKeys } from '@mmmike/web-push/vapid';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
@@ -49,34 +48,15 @@ async function saveJson(env, key, value) {
   await env.APP_KV.put(key, JSON.stringify(value));
 }
 
-async function getVapidConfig(env, requestUrl = null) {
-  if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
-    return {
-      publicKey: env.VAPID_PUBLIC_KEY,
-      privateKey: env.VAPID_PRIVATE_KEY,
-      subject: env.VAPID_SUBJECT || (requestUrl ? new URL(requestUrl).origin : 'https://example.com')
-    };
-  }
-  const stored = await env.APP_KV.get('system:vapid', 'json');
-  if (stored?.publicKey && stored?.privateKey) return stored;
-  const keys = await generateVapidKeys();
-  const subject = env.VAPID_SUBJECT || (requestUrl ? new URL(requestUrl).origin : 'https://example.com');
-  const config = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject };
-  await env.APP_KV.put('system:vapid', JSON.stringify(config));
-  return config;
-}
-
 async function handleApi(request, env) {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
 
   if (url.pathname === '/api/config' && request.method === 'GET') {
-    try {
-      const vapid = await getVapidConfig(env, request.url);
-      return cors(json({ pushEnabled: true, publicKey: vapid.publicKey }));
-    } catch (e) {
-      return cors(json({ pushEnabled: false, error: e.message }, 500));
-    }
+    return cors(json({
+      pushEnabled: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
+      publicKey: env.VAPID_PUBLIC_KEY || null
+    }));
   }
 
   if (url.pathname === '/api/stations' && request.method === 'GET') {
@@ -88,32 +68,6 @@ async function handleApi(request, env) {
     }
     try { return cors(json(await econtrol(lat, lon, fuel))); }
     catch (e) { return cors(json({ error: 'E-Control konnte nicht erreicht werden.', detail: e.message }, 502)); }
-  }
-
-  if (url.pathname === '/api/push/test' && request.method === 'POST') {
-    try {
-      const vapid = await getVapidConfig(env, request.url);
-      const subKeys = await listByPrefix(env, 'sub:');
-      let delivered = 0;
-      for (const subKey of subKeys) {
-        const sub = await env.APP_KV.get(subKey, 'json');
-        if (!sub) continue;
-        try {
-          const ok = await sendPushNotification(sub, {
-            title: '⛽ Spritpreis-App',
-            body: 'Push-Benachrichtigungen funktionieren.',
-            url: '/',
-            tag: 'spritpreis-test'
-          }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300 });
-          if (ok) delivered++; else await env.APP_KV.delete(subKey);
-        } catch (err) {
-          if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
-        }
-      }
-      return cors(json({ ok: delivered > 0, delivered }));
-    } catch (e) {
-      return cors(json({ ok: false, error: e.message }, 500));
-    }
   }
 
   if (url.pathname === '/api/push/subscribe' && request.method === 'POST') {
@@ -164,8 +118,7 @@ async function digest(value) {
 }
 
 async function checkAlarms(env) {
-  let vapid;
-  try { vapid = await getVapidConfig(env); } catch (e) { return { ok: false, reason: `VAPID konnte nicht initialisiert werden: ${e.message}` }; }
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return { ok: false, reason: 'VAPID nicht konfiguriert.' };
   const alarmKeys = await listByPrefix(env, 'alarm:');
   let checked = 0, notified = 0, removed = 0;
   for (const key of alarmKeys) {
@@ -189,9 +142,9 @@ async function checkAlarms(env) {
             url: '/',
             tag: `alarm-${alarm.id}`
           }, {
-            subject: vapid.subject,
-            publicKey: vapid.publicKey,
-            privateKey: vapid.privateKey
+            subject: env.VAPID_SUBJECT,
+            publicKey: env.VAPID_PUBLIC_KEY,
+            privateKey: env.VAPID_PRIVATE_KEY
           }, { ttl: 3600 });
           if (!delivered) await env.APP_KV.delete(subKey);
           else notified++;

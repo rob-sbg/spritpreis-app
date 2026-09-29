@@ -9,7 +9,7 @@
     "vapid": "node scripts/generate-vapid.js"
   },
   "dependencies": {
-    "@mmmike/web-push": "^1.3.0"
+    "@mmmike/web-push": "^1.0.1"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
