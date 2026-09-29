@@ -66,6 +66,24 @@ async function getVapidConfig(env, requestUrl = null) {
   return config;
 }
 
+
+async function recordHistory(env, stations, fuel) {
+  const now = new Date().toISOString();
+  const batch = (stations || []).slice(0, 10);
+  for (const station of batch) {
+    const p = priceFor(station, fuel);
+    if (p == null) continue;
+    const id = String(station.id ?? station.stationId ?? '');
+    if (!id) continue;
+    const key = `hist:${fuel}:${id}`;
+    const old = await env.APP_KV.get(key, 'json').catch(() => null) || [];
+    const last = old[old.length - 1];
+    if (last && Date.now() - Date.parse(last.t) < 14 * 60 * 1000) continue;
+    const next = [...old, { t: now, p: Number(p) }].slice(-168);
+    await env.APP_KV.put(key, JSON.stringify(next), { expirationTtl: 60 * 60 * 24 * 14 });
+  }
+}
+
 async function handleApi(request, env) {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
@@ -86,8 +104,20 @@ async function handleApi(request, env) {
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP', 'DIE'].includes(fuel)) {
       return cors(json({ error: 'Ungültige Koordinaten oder Kraftstoffart.' }, 400));
     }
-    try { return cors(json(await econtrol(lat, lon, fuel))); }
+    try {
+      const stations = await econtrol(lat, lon, fuel);
+      await recordHistory(env, stations, fuel);
+      return cors(json(stations));
+    }
     catch (e) { return cors(json({ error: 'E-Control konnte nicht erreicht werden.', detail: e.message }, 502)); }
+  }
+
+  if (url.pathname === '/api/history' && request.method === 'GET') {
+    const stationId = url.searchParams.get('stationId');
+    const fuel = url.searchParams.get('fuel') || 'SUP';
+    if (!stationId || !['SUP', 'DIE'].includes(fuel)) return cors(json({ error: 'Ungültige Historienabfrage.' }, 400));
+    const history = await env.APP_KV.get(`hist:${fuel}:${stationId}`, 'json').catch(() => null) || [];
+    return cors(json({ history }));
   }
 
   if (url.pathname === '/api/push/test' && request.method === 'POST') {
@@ -168,39 +198,50 @@ async function checkAlarms(env) {
   try { vapid = await getVapidConfig(env); } catch (e) { return { ok: false, reason: `VAPID konnte nicht initialisiert werden: ${e.message}` }; }
   const alarmKeys = await listByPrefix(env, 'alarm:');
   let checked = 0, notified = 0, removed = 0;
+  const subKeys = await listByPrefix(env, 'sub:');
   for (const key of alarmKeys) {
     const alarm = await env.APP_KV.get(key, 'json');
     if (!alarm) continue;
     checked++;
     try {
       const stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel);
+      await recordHistory(env, stations, alarm.fuel);
       const station = (stations || []).find(s => String(s.id) === String(alarm.stationId));
       const price = priceFor(station, alarm.fuel);
-      if (price == null || Number(price) > Number(alarm.maxPrice)) continue;
-
-      const subKeys = await listByPrefix(env, 'sub:');
-      for (const subKey of subKeys) {
-        const sub = await env.APP_KV.get(subKey, 'json');
-        if (!sub) continue;
-        try {
-          const delivered = await sendPushNotification(sub, {
-            title: '⛽ Preisalarm',
-            body: `${alarm.stationName}: ${Number(price).toFixed(3).replace('.', ',')} €/L`,
-            url: '/',
-            tag: `alarm-${alarm.id}`
-          }, {
-            subject: vapid.subject,
-            publicKey: vapid.publicKey,
-            privateKey: vapid.privateKey
-          }, { ttl: 3600 });
-          if (!delivered) await env.APP_KV.delete(subKey);
-          else notified++;
-        } catch (err) {
-          if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
+      if (price == null) continue;
+      const current = Number(price);
+      const max = Number(alarm.maxPrice);
+      const wasAbove = alarm.lastPrice == null || Number(alarm.lastPrice) > max;
+      const isBelow = current <= max;
+      // Notify only when the price crosses the threshold. If it remains below,
+      // do not send another notification every 15 minutes.
+      if (isBelow && wasAbove && subKeys.length) {
+        for (const subKey of subKeys) {
+          const sub = await env.APP_KV.get(subKey, 'json');
+          if (!sub) continue;
+          try {
+            const delivered = await sendPushNotification(sub, {
+              title: '⛽ Preisalarm',
+              body: `${alarm.stationName}: ${current.toFixed(3).replace('.', ',')} €/L`,
+              url: '/',
+              tag: `alarm-${alarm.id}`
+            }, {
+              subject: vapid.subject,
+              publicKey: vapid.publicKey,
+              privateKey: vapid.privateKey
+            }, { ttl: 3600 });
+            if (!delivered) await env.APP_KV.delete(subKey);
+            else notified++;
+          } catch (err) {
+            if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
+          }
         }
+        alarm.triggeredAt = new Date().toISOString();
       }
-      await env.APP_KV.delete(key);
-      removed++;
+      // The alarm remains active. Once the price rises above the limit it is
+      // re-armed automatically and can notify again on a later crossing.
+      alarm.lastPrice = current;
+      await saveJson(env, key, alarm);
     } catch (err) {
       console.log('Alarmprüfung fehlgeschlagen', err?.message || err);
     }
