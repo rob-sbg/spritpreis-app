@@ -16,7 +16,7 @@
 <div class="toolbar"><button id="locate" class="primary">📍 Standort verwenden</button><button id="refresh">↻ Aktualisieren</button><button id="install" style="display:none">＋ App installieren</button></div>
 <div class="tabs"><button id="nearbyTab" class="active">In der Nähe</button><button id="favTab">⭐ Meine Tankstellen <span id="favCount">0</span></button></div>
 <div class="search"><span>⌕</span><input id="search" placeholder="Tankstelle oder Ort suchen …" autocomplete="off"></div>
-<div id="status" class="status">Noch kein Standort geladen.</div><div class="card" id="alarmCard"><div class="name">🔔 Preisalarm</div><div class="address">Benachrichtige mich, wenn eine meiner Tankstellen unter deinem Preislimit liegt.</div><div class="actions"><button onclick="setupPush()">Push aktivieren</button><button onclick="showAlarmDialog()">Alarm setzen</button></div><div id="alarmList" class="meta"></div></div>
+<div id="status" class="status">Noch kein Standort geladen.</div><div class="card" id="alarmCard"><div class="name">🔔 Preisalarm</div><div class="address">Benachrichtige mich, wenn eine meiner Tankstellen unter deinem Preislimit liegt.</div><div class="actions"><button onclick="setupPush()">🔔 Push aktivieren</button><button onclick="showAlarmDialog()">Alarm setzen</button></div><div id="alarmList" class="meta"></div></div>
 <section id="list"></section>
 <div class="notice">Preise stammen aus der Preistransparenzdatenbank der E-Control. Die Anzeige ist eine unverbindliche Information; maßgeblich ist der Preis an der Zapfsäule.</div>
 </main>
@@ -34,7 +34,7 @@ function getLocation(){
 async function load(){
  if(!state.coords){getLocation();return}
  setStatus('<span class="spinner"></span> Preise werden aktualisiert…');
- try{const r=await fetch(`/api/stations?latitude=${state.coords.lat}&longitude=${state.coords.lon}&fuel=${state.fuel}`);const d=await r.json();if(!r.ok)throw new Error(d.error||'Fehler');state.stations=d||[];render();checkAlarms();setStatus(`Aktualisiert: ${new Date().toLocaleTimeString('de-AT',{hour:'2-digit',minute:'2-digit'})} · ${state.stations.length} Tankstellen in der Abfrage`)}catch(e){setStatus('Fehler: '+e.message)}}
+ try{const r=await fetch(`/api/stations?latitude=${state.coords.lat}&longitude=${state.coords.lon}&fuel=${state.fuel}`);const d=await r.json();if(!r.ok)throw new Error(d.error||'Fehler');state.stations=d||[];render();setStatus(`Aktualisiert: ${new Date().toLocaleTimeString('de-AT',{hour:'2-digit',minute:'2-digit'})} · ${state.stations.length} Tankstellen in der Abfrage`)}catch(e){setStatus('Fehler: '+e.message)}}
 function render(){
  const list=$('list'); updateFavCount();
  let rows=[...state.stations];
@@ -50,10 +50,30 @@ function map(lat,lon){window.open(`https://www.google.com/maps/dir/?api=1&destin
 function setStatus(t){$('status').innerHTML=t}
 function esc(s){return String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\':'&#92;','"':'&quot;'}[c]))}
 setInterval(()=>{if(state.coords)load()},5*60*1000); let deferredPrompt; window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('install').style.display='inline-block'}); if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js'); renderAlarms();
-async function setupPush(){if(!('Notification' in window)||!('serviceWorker' in navigator)){alert('Push-Benachrichtigungen werden von diesem Browser nicht unterstützt.');return} const cfg=await fetch('/api/config').then(r=>r.json()); if(!cfg.pushEnabled){alert('Push ist auf diesem Server noch nicht konfiguriert. Für die lokale App kannst du sie trotzdem installieren.');return} const permission=await Notification.requestPermission(); if(permission!=='granted')return; const reg=await navigator.serviceWorker.ready; const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.publicKey)}); const id=localStorage.getItem('push-id')||crypto.randomUUID();localStorage.setItem('push-id',id);await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({subscription:sub})});localStorage.setItem('push-endpoint',sub.endpoint);alert('Push-Benachrichtigungen sind aktiviert.');}
+async function setupPush(){
+  if(!('Notification' in window)||!('serviceWorker' in navigator)||!('PushManager' in window)){
+    alert('Push-Benachrichtigungen werden von diesem Browser nicht unterstützt. Auf dem iPhone muss die App zuerst zum Home-Bildschirm hinzugefügt werden.');
+    return;
+  }
+  try{
+    const cfg=await fetch('/api/config',{cache:'no-store'}).then(r=>r.json());
+    if(!cfg.pushEnabled||!cfg.publicKey) throw new Error(cfg.error||'Push ist noch nicht konfiguriert.');
+    const permission=await Notification.requestPermission();
+    if(permission!=='granted'){ alert('Benachrichtigungen wurden nicht erlaubt.'); return; }
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.publicKey)});
+    }
+    await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({subscription:sub.toJSON?sub.toJSON():sub})});
+    localStorage.setItem('push-enabled','1');
+    const test=await fetch('/api/push/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(r=>r.json());
+    if(!test.ok) throw new Error(test.error||'Testbenachrichtigung konnte nicht gesendet werden.');
+    alert('Push ist aktiviert. Eine Testbenachrichtigung wurde gesendet.');
+  }catch(e){ alert('Push konnte nicht aktiviert werden: '+e.message); }
+}
 function urlBase64ToUint8Array(b){const p='='.repeat((4-b.length%4)%4),raw=atob((b+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
-function showAlarmDialog(){const f=state.favorites.map(id=>state.stations.find(s=>String(s.id)===id)).filter(Boolean);if(!f.length){alert('Bitte zuerst eine Tankstelle als Favorit speichern.');return} const s=f[0];const val=prompt(`Preislimit für ${s.name||'Tankstelle'} in €/L`, '1.500');if(val===null)return;const max=Number(String(val).replace(',','.'));if(!Number.isFinite(max))return alert('Bitte einen gültigen Preis eingeben.');const alarm={id:crypto.randomUUID(),stationId:String(s.id),stationName:s.name||'Tankstelle',fuel:state.fuel,maxPrice:max,latitude:Number(s.latitude??s.lat??s.location?.latitude??state.coords.lat),longitude:Number(s.longitude??s.lon??s.location?.longitude??state.coords.lon)};state.alarms.push(alarm);localStorage.setItem('sprit-alarms',JSON.stringify(state.alarms));renderAlarms();fetch('/api/alarms',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(alarm)}).then(()=>checkAlarms()).catch(()=>{});}
+function showAlarmDialog(){const f=state.favorites.map(id=>state.stations.find(s=>String(s.id)===id)).filter(Boolean);if(!f.length){alert('Bitte zuerst eine Tankstelle als Favorit speichern.');return} const s=f[0];const val=prompt(`Preislimit für ${s.name||'Tankstelle'} in €/L`, '1.500');if(val===null)return;const max=Number(String(val).replace(',','.'));if(!Number.isFinite(max))return alert('Bitte einen gültigen Preis eingeben.');const alarm={id:crypto.randomUUID(),stationId:String(s.id),stationName:s.name||'Tankstelle',fuel:state.fuel,maxPrice:max,latitude:Number(s.latitude??s.lat??s.location?.latitude??state.coords.lat),longitude:Number(s.longitude??s.lon??s.location?.longitude??state.coords.lon)};state.alarms.push(alarm);localStorage.setItem('sprit-alarms',JSON.stringify(state.alarms));renderAlarms();fetch('/api/alarms',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(alarm)}).catch(()=>{});}
 function renderAlarms(){const el=$('alarmList');if(!el)return;el.innerHTML=state.alarms.map(a=>`<span class="pill">${esc(a.stationName)} · ${a.fuel==='DIE'?'Diesel':'Super 95'} ≤ ${a.maxPrice.toFixed(3).replace('.',',')} €/L <button style="border:0;background:none;cursor:pointer" onclick="removeAlarm('${a.id}')">×</button></span>`).join('')}
 function removeAlarm(id){state.alarms=state.alarms.filter(a=>a.id!==id);localStorage.setItem('sprit-alarms',JSON.stringify(state.alarms));renderAlarms();fetch('/api/alarms/'+id,{method:'DELETE'}).catch(()=>{})}
-async function checkAlarms(){if(!state.stations.length)return;const pushId=localStorage.getItem('push-id');if(!pushId)return;for(const a of state.alarms){const s=state.stations.find(x=>String(x.id)===a.stationId);const p=s&&(s.prices||[]).find(x=>x.fuelType===a.fuel)?.amount;if(p!=null&&p<=a.maxPrice){try{await fetch('/api/alarms',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...a,id:pushId,latitude:state.coords?.lat,longitude:state.coords?.lon})});await fetch('/api/alarms/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stations:state.stations,fuel:state.fuel})})}catch{}}}}
 </script></body></html>
