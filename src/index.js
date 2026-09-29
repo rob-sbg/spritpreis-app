@@ -84,6 +84,26 @@ async function recordHistory(env, stations, fuel) {
   }
 }
 
+async function geocodeSearch(query) {
+  const u = new URL('https://nominatim.openstreetmap.org/search');
+  u.searchParams.set('q', query);
+  u.searchParams.set('format', 'jsonv2');
+  u.searchParams.set('limit', '1');
+  u.searchParams.set('countrycodes', 'at');
+  const r = await fetch(u.toString(), {
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'Spritpreis-App/5.2 (E-Control price app)'
+    }
+  });
+  if (!r.ok) throw new Error(`Geosuche HTTP ${r.status}`);
+  const rows = await r.json();
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const lat = Number(rows[0].lat), lon = Number(rows[0].lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon, displayName: rows[0].display_name || query };
+}
+
 async function handleApi(request, env) {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
@@ -94,6 +114,23 @@ async function handleApi(request, env) {
       return cors(json({ pushEnabled: true, publicKey: vapid.publicKey }));
     } catch (e) {
       return cors(json({ pushEnabled: false, error: e.message }, 500));
+    }
+  }
+
+  if (url.pathname === '/api/search' && request.method === 'GET') {
+    const q = (url.searchParams.get('q') || '').trim();
+    const fuel = url.searchParams.get('fuel') || 'SUP';
+    if (q.length < 2 || !['SUP', 'DIE'].includes(fuel)) {
+      return cors(json({ error: 'Bitte mindestens 2 Zeichen eingeben.' }, 400));
+    }
+    try {
+      const geo = await geocodeSearch(q);
+      if (!geo) return cors(json({ stations: [], location: null, message: 'Ort oder Adresse nicht gefunden.' }));
+      const stations = await econtrol(geo.lat, geo.lon, fuel);
+      await recordHistory(env, stations, fuel);
+      return cors(json({ stations, location: geo }));
+    } catch (e) {
+      return cors(json({ error: 'Suche konnte nicht ausgeführt werden.', detail: e.message }, 502));
     }
   }
 
