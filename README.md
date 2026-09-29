@@ -22,21 +22,11 @@ npx wrangler kv namespace create APP_KV
 Der Befehl gibt eine Namespace-ID aus. Diese ID in `wrangler.jsonc` bei
 `DEINE_KV_NAMESPACE_ID_HIER` eintragen.
 
-## 3. VAPID-Schlüssel erzeugen
+## 3. Push-Benachrichtigungen
 
-```bash
-npm run vapid
-```
+Es ist keine manuelle VAPID-Konfiguration nötig. Beim ersten Aufruf von „Push aktivieren“ erzeugt der Worker automatisch ein VAPID-Schlüsselpaar und speichert es im privaten `APP_KV`-Namespace. Die App sendet anschließend eine Testbenachrichtigung.
 
-Die drei ausgegebenen Werte als Cloudflare Secrets setzen:
-
-```bash
-npx wrangler secret put VAPID_PUBLIC_KEY
-npx wrangler secret put VAPID_PRIVATE_KEY
-npx wrangler secret put VAPID_SUBJECT
-```
-
-Bei `VAPID_SUBJECT` z. B. `mailto:deine-email@example.com` verwenden.
+Für iPhone muss die Web-App zuerst über Safari zum Home-Bildschirm hinzugefügt werden. Apple unterstützt Web Push für Home-Screen-Web-Apps ab iOS/iPadOS 16.4.
 
 ## 4. Lokal testen
 
