@@ -18,7 +18,7 @@
 <div class="toolbar"><button id="locate" class="primary">📍 Standort verwenden</button><button id="refresh">↻ Aktualisieren</button><button id="install" style="display:none">＋ App installieren</button></div>
 <div class="tabs"><button id="nearbyTab" class="active">In der Nähe</button><button id="favTab">⭐ Meine Tankstellen <span id="favCount">0</span></button><button id="mapTab">🗺️ Karte</button></div>
 <div class="search"><span>⌕</span><input id="search" placeholder="Tankstelle, Ort oder Adresse suchen …" autocomplete="off"><button id="searchClear" aria-label="Suche löschen" style="display:none">✕</button></div><div id="searching" class="searching" style="display:none">Suche Ort/Adresse…</div>
-<div class="filterbar"><div class="small">Tankstellenanzeige</div><div class="filter-controls"><div class="switch"><button id="openOnly" class="active">Geöffnet</button><button id="allStations">Alle</button></div><label class="small" for="radius">Radius</label><select id="radius" class="radius-select"><option value="2">2 km</option><option value="5">5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select></div></div><div id="status" class="status">Noch kein Standort geladen.</div><section id="bestCard" class="card best-summary" style="display:none"></section><div class="card" id="alarmCard"><div class="name">🔔 Preisalarm</div><div class="address">Benachrichtige mich, wenn eine meiner Tankstellen unter deinem Preislimit liegt.</div><div class="actions"><button onclick="setupPush()">🔔 Push aktivieren</button><button onclick="showAlarmDialog()">Alarm setzen</button></div><div id="alarmList" class="meta"></div></div>
+<div class="filterbar"><div class="small">Tankstellenanzeige</div><div class="filter-controls"><div class="switch"><button id="openOnly" class="active">Geöffnet</button><button id="allStations">Alle</button></div><label class="small" for="radius">Radius</label><select id="radius" class="radius-select"><option value="2">2 km</option><option value="5">5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select></div></div><div id="status" class="status">Noch kein Standort geladen.</div><div id="resultNote" class="small" style="margin:0 4px 8px;color:var(--muted)"></div><section id="bestCard" class="card best-summary" style="display:none"></section><div class="card" id="alarmCard"><div class="name">🔔 Preisalarm</div><div class="address">Benachrichtige mich, wenn eine meiner Tankstellen unter deinem Preislimit liegt.</div><div class="actions"><button onclick="setupPush()">🔔 Push aktivieren</button><button onclick="showAlarmDialog()">Alarm setzen</button></div><div id="alarmList" class="meta"></div></div>
 <section id="list"></section><section id="mapWrap" class="card map-wrap"><div class="name">🗺️ Tankstellenkarte</div><div id="map"></div><div class="small" style="margin-top:8px">Tippe auf einen Marker für Name und Preis.</div></section><div id="historyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;padding:20px;align-items:flex-end;justify-content:center"><div class="card" style="width:min(760px,100%);max-height:80vh;overflow:auto"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="name" id="historyTitle">Preisverlauf</div><div class="small">Letzte gespeicherte Messungen</div></div><button onclick="closeHistory()">Schließen</button></div><canvas id="historyChart" class="chart" width="700" height="150" style="margin-top:15px"></canvas><div id="historyText" class="small" style="margin-top:10px"></div></div></div>
 <div class="notice">Preise stammen aus der Preistransparenzdatenbank der E-Control. Die Anzeige ist eine unverbindliche Information; maßgeblich ist der Preis an der Zapfsäule.</div>
 </main>
@@ -82,10 +82,66 @@ function setView(v){state.view=v;$('nearbyTab').classList.toggle('active',v==='n
 function updateFavCount(){$('favCount').textContent=state.favorites.length}
 function getLocation(){if(!navigator.geolocation){setStatus('Dein Browser unterstützt keine Standortbestimmung.');return}setStatus('Standort wird ermittelt…');navigator.geolocation.getCurrentPosition(p=>{state.coords={lat:p.coords.latitude,lon:p.coords.longitude};localStorage.setItem('sprit-coords',JSON.stringify(state.coords));load(true)},()=>{if(state.coords)load(true);else setStatus('Standort konnte nicht ermittelt werden. Bitte Standortfreigabe aktivieren.')},{enableHighAccuracy:false,maximumAge:10*60*1000,timeout:15000})}
 async function load(force=false){if(state.query)return;if(loadInFlight)return;if(!state.coords){getLocation();return}loadInFlight=true;setStatus('<span class="spinner"></span> Preise werden aktualisiert…');try{const r=await fetch(`/api/stations?latitude=${state.coords.lat}&longitude=${state.coords.lon}&fuel=${state.fuel}&includeClosed=${state.includeClosed?'true':'false'}&radius=${state.radius}`,{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Fehler');if(Array.isArray(d)&&d.length){state.stations=d;state.stationsSavedAt=Date.now();saveCurrentData();render();setStatus(`Aktualisiert: ${new Date().toLocaleTimeString('de-AT',{hour:'2-digit',minute:'2-digit'})} · ${state.stations.length} Tankstellen im Radius ${state.radius} km${state.includeClosed?' · inkl. geschlossener':''}`)}else if(state.stations.length){render();setStatus('Aktuelle Abfrage war leer – zuletzt geladene Tankstellen werden angezeigt.')}else{state.stations=[];render();setStatus('Keine Tankstellen in der Abfrage gefunden.')}}catch(e){if(state.stations.length){render();setStatus('Aktualisierung fehlgeschlagen – zuletzt geladene Tankstellen werden angezeigt.')}else setStatus('Fehler: '+e.message)}finally{loadInFlight=false}}
-function filteredRows(){let rows=state.view==='favorites'?favoriteRows():[...state.stations];
-if(state.query && !state.searchLocation)rows=rows.filter(s=>{const l=s.location||{};return [s.name,l.address,l.city,l.postalCode].filter(Boolean).join(' ').toLowerCase().includes(state.query)});
-return rows.sort((a,b)=>(price(a)??Infinity)-(price(b)??Infinity))}
-function render(){updateFavCount();if(state.view==='map'){renderBestCard(filteredRows());renderMap();return}const list=$('list'),rows=filteredRows();renderBestCard(rows);if(!rows.length){list.innerHTML=`<div class="card empty">${state.view==='favorites'?'Noch keine gespeicherten Tankstellen. Tippe bei einer Tankstelle auf ☆ Favorit.':'Keine passenden Tankstellen gefunden.'}</div>`;return}const best=rows.find(s=>price(s)!=null);list.innerHTML=rows.map((s,i)=>{const p=price(s),fav=state.favorites.includes(String(s.id)),loc=s.location||{},dist=typeof s.distance==='number'?`${s.distance.toFixed(1)} km`:'';return `<article class="card ${i===0&&best?'best':''}"><div class="station"><div><div class="name">${i===0&&best?'🟢 Günstigste · ':''}${esc(s.name||'Tankstelle')}</div><div class="address">${esc([loc.address,loc.postalCode,loc.city].filter(Boolean).join(', '))}</div><div class="meta">${s.open===false?'<span class="pill">geschlossen</span>':'<span class="pill">geöffnet</span>'}${dist?`<span class="pill">${dist} entfernt</span>`:''}</div></div><div class="price">${p!=null?p.toFixed(3).replace('.',','):'–'} <span class="unit">€/L</span></div></div><div class="actions"><button class="fav" onclick="toggleFav('${String(s.id)}')">${fav?'★ Entfernen':'☆ Favorit'}</button>${loc.latitude?`<button onclick="mapRoute(${loc.latitude},${loc.longitude})">Route</button>`:''}<button onclick="showHistory('${String(s.id)}','${esc(s.name||'Tankstelle')}')">Preisverlauf</button></div></article>`}).join('')}
+function filteredRows(){
+  let rows=state.view==='favorites'?favoriteRows():[...state.stations];
+  const isLocationSearch=Boolean(state.searchLocation);
+  if(state.query && !isLocationSearch){
+    rows=rows.filter(s=>{
+      const l=s.location||{};
+      return [s.name,l.address,l.city,l.postalCode].filter(Boolean).join(' ').toLowerCase().includes(state.query);
+    });
+  }
+  return rows.sort((a,b)=>(price(a)??Infinity)-(price(b)??Infinity));
+}
+function render(){
+  updateFavCount();
+  if(state.view==='map'){
+    const mapRows=filteredRows();
+    renderBestCard(mapRows);
+    renderMap();
+    return;
+  }
+
+  const list=$('list');
+  const rows=filteredRows();
+  renderBestCard(rows);
+
+  const sourceCount=state.view==='favorites'?state.favorites.length:state.stations.length;
+  const visibleCount=rows.length;
+  const mode=state.searchLocation?'Ortssuche':(state.query?'Textsuche':'Umgebung');
+
+  // Keep the diagnostic count visible so a future iOS rendering issue cannot
+  // hide the distinction between data received and cards rendered.
+  const resultNote=$('resultNote');
+  if(resultNote){
+    resultNote.textContent=`${mode}: ${sourceCount} gefunden · ${visibleCount} angezeigt${state.view==='favorites'?' · Favoriten':''}`;
+  }
+
+  if(!rows.length){
+    list.innerHTML=`<div class="card empty">${state.view==='favorites'?'Keine gespeicherten Tankstellen gefunden.':'Keine passenden Tankstellen gefunden.'}</div>`;
+    return;
+  }
+
+  const best=rows.find(s=>price(s)!=null);
+  // Render every row. There is deliberately no slice(), pagination or hard limit.
+  list.innerHTML=rows.map((s,i)=>{
+    const p=price(s),fav=state.favorites.includes(String(s.id)),loc=s.location||{},
+      dist=typeof s.distance==='number'?`${s.distance.toFixed(1)} km`:'';
+    return `<article class="card ${i===0&&best?'best':''}" data-station-index="${i+1}" data-station-id="${esc(String(s.id??s.stationId??''))}">
+      <div class="station"><div><div class="name">${i===0&&best?'🟢 Günstigste · ':''}${esc(s.name||'Tankstelle')}</div>
+      <div class="address">${esc([loc.address,loc.postalCode,loc.city].filter(Boolean).join(', '))}</div>
+      <div class="meta">${s.open===false?'<span class="pill">geschlossen</span>':'<span class="pill">geöffnet</span>'}${dist?`<span class="pill">${dist} entfernt</span>`:''}</div></div>
+      <div class="price">${p!=null?p.toFixed(3).replace('.',','):'–'} <span class="unit">€/L</span></div></div>
+      <div class="actions"><button class="fav" onclick="toggleFav('${String(s.id)}')">${fav?'★ Entfernen':'☆ Favorit'}</button>
+      ${loc.latitude?`<button onclick="mapRoute(${loc.latitude},${loc.longitude})">Route</button>`:''}
+      <button onclick="showHistory('${String(s.id)}','${esc(s.name||'Tankstelle')}')">Preisverlauf</button></div>
+    </article>`;
+  }).join('');
+
+  // Verify what the DOM actually contains.
+  const renderedCount=list.querySelectorAll('[data-station-index]').length;
+  if(resultNote) resultNote.textContent=`${mode}: ${sourceCount} gefunden · ${visibleCount} angezeigt · ${renderedCount} Karten`;
+}
 function renderBestCard(rows){const el=$('bestCard');const best=rows.find(s=>s.open!==false&&price(s)!=null);if(!best){el.style.display='none';el.innerHTML='';return}const p=price(best),loc=best.location||{},fav=state.favorites.includes(String(best.id)),dist=typeof best.distance==='number'?`${best.distance.toFixed(1)} km`:'';const title=state.view==='favorites'?'Günstigste deiner Favoriten':'Günstigste in deiner Nähe';el.style.display='block';el.innerHTML=`<div class="best-title">🟢 ${title}</div><div class="best-grid" style="margin-top:7px"><div><div class="name" style="font-size:20px">${esc(best.name||'Tankstelle')}</div><div class="address">${esc([loc.address,loc.postalCode,loc.city].filter(Boolean).join(', '))}</div><div class="meta">${dist?`<span class="pill">${dist} entfernt</span>`:''}${best.open===false?'<span class="pill">geschlossen</span>':'<span class="pill">geöffnet</span>'}</div></div><div class="best-price">${p.toFixed(3).replace('.',',')} <span class="unit">€/L</span></div></div><div class="actions"><button class="fav" onclick="toggleFav('${String(best.id)}')">${fav?'★ Entfernen':'☆ Favorit'}</button>${loc.latitude?`<button onclick="mapRoute(${loc.latitude},${loc.longitude})">Route</button>`:''}<button onclick="showHistory('${String(best.id)}','${esc(best.name||'Tankstelle')}')">📈 Preisverlauf</button></div>`}
 function price(s){const x=(s.prices||[]).find(p=>p.fuelType===state.fuel)||s.prices?.[0];return x?.amount??x?.price??null}
 function toggleFav(id){id=String(id);const existing=state.stations.find(s=>String(s?.id??s?.stationId)===id);if(state.favorites.includes(id)){state.favorites=state.favorites.filter(x=>x!==id);delete state.favoriteStations[id]}else{state.favorites=[...state.favorites,id];if(existing)state.favoriteStations[id]=existing}localStorage.setItem('sprit-favorites',JSON.stringify(state.favorites));saveFavoriteStations();render()}
