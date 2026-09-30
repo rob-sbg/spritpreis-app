@@ -33,16 +33,34 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 
 async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiusKm = 10) {
   const radius = Math.max(1, Math.min(50, Number(radiusKm) || 10));
-  const points = [[lat, lon]];
-  if (radius > 10) {
-    const sampleRadius = radius * 0.65;
-    const latDelta = sampleRadius / 111.32;
-    const lonDelta = sampleRadius / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
-    for (let i = 0; i < 8; i++) {
-      const a = i * Math.PI / 4;
-      points.push([lat + Math.sin(a) * latDelta, lon + Math.cos(a) * lonDelta]);
+
+  // E-Control returns only the 10 nearest stations for each coordinate.
+  // A single center query therefore misses stations in denser areas.
+  // Use a small geographic grid so the union contains substantially more
+  // of the stations inside the requested radius.
+  const points = [];
+  const cosLat = Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const stepKm = radius <= 10 ? Math.max(2.5, radius * 0.5) : radius * 0.55;
+  const half = Math.ceil(radius / stepKm);
+  const latStep = stepKm / 111.32;
+  const lonStep = stepKm / (111.32 * cosLat);
+
+  for (let y = -half; y <= half; y++) {
+    for (let x = -half; x <= half; x++) {
+      const pointLat = lat + y * latStep;
+      const pointLon = lon + x * lonStep;
+      // Keep query points reasonably close to the requested circle.
+      if (haversineKm(lat, lon, pointLat, pointLon) <= radius * 1.05) {
+        points.push([pointLat, pointLon]);
+      }
     }
   }
+
+  // Always query the exact center.
+  if (!points.some(([a, o]) => Math.abs(a - lat) < 1e-10 && Math.abs(o - lon) < 1e-10)) {
+    points.push([lat, lon]);
+  }
+
   const batches = await Promise.all(points.map(([a, o]) => econtrol(a, o, fuel, includeClosed)));
   const byId = new Map();
   for (const list of batches) {
