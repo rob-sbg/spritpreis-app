@@ -55,3 +55,7 @@ Das bereitgestellte Logo ist als transparenter `public/logo.png`-Asset eingebund
 
 ### V5.14: Aktualisieren-Fix
 Der Aktualisieren-Button lädt nun auch eine aktive Ort-/Adresssuche erneut. Eine bestehende Suche wird nicht mehr durch die frühere `state.query`-Sperre blockiert.
+
+
+### V5.15: CNG / Erdgas
+CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E-Control-Fuel-Type `GAS`. CNG funktioniert damit in Standortsuche, Ortssuche, Radius, geschlossenen Tankstellen, Favoriten, Preisverlauf und Preisalarmen.

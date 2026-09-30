@@ -235,7 +235,7 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/search' && request.method === 'GET') {
     const q = (url.searchParams.get('q') || '').trim();
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (q.length < 2 || !['SUP', 'DIE'].includes(fuel)) {
+    if (q.length < 2 || !['SUP', 'DIE', 'GAS'].includes(fuel)) {
       return cors(json({ error: 'Bitte mindestens 2 Zeichen eingeben.' }, 400));
     }
     try {
@@ -255,7 +255,7 @@ async function handleApi(request, env) {
     const lat = Number(url.searchParams.get('latitude'));
     const lon = Number(url.searchParams.get('longitude'));
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP', 'DIE'].includes(fuel)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP', 'DIE', 'GAS'].includes(fuel)) {
       return cors(json({ error: 'Ungültige Koordinaten oder Kraftstoffart.' }, 400));
     }
     try {
@@ -271,7 +271,7 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/history' && request.method === 'GET') {
     const stationId = url.searchParams.get('stationId');
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (!stationId || !['SUP', 'DIE'].includes(fuel)) return cors(json({ error: 'Ungültige Historienabfrage.' }, 400));
+    if (!stationId || !['SUP', 'DIE', 'GAS'].includes(fuel)) return cors(json({ error: 'Ungültige Historienabfrage.' }, 400));
     const history = await env.APP_KV.get(`hist:${fuel}:${stationId}`, 'json').catch(() => null) || [];
     return cors(json({ history }));
   }
@@ -320,7 +320,7 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/alarms' && request.method === 'POST') {
     const body = await request.json().catch(() => null);
     const { id, stationId, stationName, fuel = 'SUP', maxPrice, latitude, longitude } = body || {};
-    if (!id || !stationId || !['SUP', 'DIE'].includes(fuel) || !Number.isFinite(Number(maxPrice)) || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+    if (!id || !stationId || !['SUP', 'DIE', 'GAS'].includes(fuel) || !Number.isFinite(Number(maxPrice)) || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
       return cors(json({ error: 'Ungültiger Alarm.' }, 400));
     }
     await saveJson(env, `alarm:${id}`, {
