@@ -47,3 +47,7 @@ Dieses Paket enthält den vollständigen Projektstand mit:
 - Ortssuche ohne nachträglichen Textfilter auf die gefundenen Radius-Treffer
 
 Die ZIP enthält bewusst die vollständigen Verzeichnisse `src/`, `public/` und `scripts/`.
+
+
+### V5.13: App-Logo
+Das bereitgestellte Logo ist als transparenter `public/logo.png`-Asset eingebunden und wird oben im dunklen App-Header angezeigt.
