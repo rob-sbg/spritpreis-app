@@ -51,3 +51,7 @@ Die ZIP enthält bewusst die vollständigen Verzeichnisse `src/`, `public/` und 
 
 ### V5.13: App-Logo
 Das bereitgestellte Logo ist als transparenter `public/logo.png`-Asset eingebunden und wird oben im dunklen App-Header angezeigt.
+
+
+### V5.14: Aktualisieren-Fix
+Der Aktualisieren-Button lädt nun auch eine aktive Ort-/Adresssuche erneut. Eine bestehende Suche wird nicht mehr durch die frühere `state.query`-Sperre blockiert.
