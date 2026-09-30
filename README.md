@@ -16,7 +16,7 @@ Neue Funktionen:
 Hinweis: Der Preisverlauf wird bei Preisabfragen und Alarmprüfungen aufgebaut. Für eine vollständige Historie braucht die App daher einige Messzyklen.
 
 
-## V5.8 – Suchradius
+## V5.9 – Suchradius
 - Suchradius 2, 5, 10, 20, 30 oder 50 km
 - Radius wird lokal gespeichert
 - Suche und Standortabfrage berücksichtigen den Radius
@@ -24,5 +24,9 @@ Hinweis: Der Preisverlauf wird bei Preisabfragen und Alarmprüfungen aufgebaut. 
 - Für größere Radien werden mehrere E-Control-Standortabfragen zusammengeführt und anschließend exakt nach Luftlinie gefiltert
 
 
-### Radius-Suche V5.8
+### Radius-Suche V5.9
 Die Radius-Suche verwendet mehrere geografische Abfragepunkte, da E-Control pro Koordinate nur die nächstgelegenen Tankstellen liefert. Die Ergebnisse werden zusammengeführt und anschließend exakt nach Luftlinienentfernung gefiltert.
+
+
+### V5.9: Vollständigere Radius-Suche
+Zusätzlich zur Mehrpunkt-Adresssuche werden nahe politische Bezirke über die offizielle E-Control-Regionssuche abgefragt. Danach werden alle Treffer nach exakter Luftlinienentfernung zum Suchpunkt gefiltert. Damit werden in dicht besiedelten Gebieten deutlich mehr Tankstellen gefunden.

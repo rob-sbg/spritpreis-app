@@ -19,7 +19,122 @@ async function econtrol(lat, lon, fuel, includeClosed = false) {
   const url = `${ECONTROL}?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&fuelType=${encodeURIComponent(fuel)}&includeClosed=${includeClosed ? 'true' : 'false'}`;
   const r = await fetch(url, { headers: { accept: 'application/json' } });
   if (!r.ok) throw new Error(`E-Control HTTP ${r.status}`);
-  return r.json();
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function econtrolRegion(code, type, fuel, includeClosed = false) {
+  const u = new URL('https://api.e-control.at/sprit/1.0/search/gas-stations/by-region');
+  u.searchParams.set('code', String(code));
+  u.searchParams.set('type', type);
+  u.searchParams.set('fuelType', fuel);
+  u.searchParams.set('includeClosed', includeClosed ? 'true' : 'false');
+  const r = await fetch(u.toString(), { headers: { accept: 'application/json' } });
+  if (!r.ok) throw new Error(`E-Control Regionsuche HTTP ${r.status}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function getRegionUnits(env) {
+  const key = 'system:econtrol-region-units:v1';
+  try {
+    const cached = await env.APP_KV.get(key, 'json');
+    if (Array.isArray(cached) && cached.length) return cached;
+  } catch {}
+  const r = await fetch('https://api.e-control.at/sprit/1.0/regions/units', {
+    headers: { accept: 'application/json' }
+  });
+  if (!r.ok) throw new Error(`E-Control Regionsdaten HTTP ${r.status}`);
+  const data = await r.json();
+  if (!Array.isArray(data)) throw new Error('Ungültige E-Control Regionsdaten');
+  await env.APP_KV.put(key, JSON.stringify(data), { expirationTtl: 86400 });
+  return data;
+}
+
+function districtCandidates(units, lat, lon, radiusKm) {
+  const districts = [];
+  for (const state of units || []) {
+    for (const district of state?.b || []) {
+      const points = (district?.g || [])
+        .map(g => [Number(g?.b), Number(g?.l)])
+        .filter(([a,o]) => Number.isFinite(a) && Number.isFinite(o));
+      if (!points.length) continue;
+      let min = Infinity;
+      for (const [a,o] of points) min = Math.min(min, haversineKm(lat, lon, a, o));
+      districts.push({ code: district.c, name: district.n, minDistance: min });
+    }
+  }
+  // Include all districts that have a municipality reasonably near the circle,
+  // plus a few nearest districts to cover administrative boundaries.
+  return districts
+    .filter(d => d.minDistance <= radiusKm + 35)
+    .sort((a,b) => a.minDistance - b.minDistance)
+    .slice(0, 8);
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiusKm = 10, env = null) {
+  const radius = Math.max(1, Math.min(50, Number(radiusKm) || 10));
+
+  // E-Control's address search returns only the ten nearest stations.
+  // Combine several address points with nearby district searches, then
+  // perform the final exact radius filter ourselves.
+  const points = [];
+  const cosLat = Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const stepKm = radius <= 10 ? Math.max(2.5, radius * 0.5) : radius * 0.55;
+  const half = Math.ceil(radius / stepKm);
+  const latStep = stepKm / 111.32;
+  const lonStep = stepKm / (111.32 * cosLat);
+
+  for (let y = -half; y <= half; y++) {
+    for (let x = -half; x <= half; x++) {
+      const pointLat = lat + y * latStep;
+      const pointLon = lon + x * lonStep;
+      if (haversineKm(lat, lon, pointLat, pointLon) <= radius * 1.05) {
+        points.push([pointLat, pointLon]);
+      }
+    }
+  }
+  points.push([lat, lon]);
+
+  const requests = points.map(([a,o]) => econtrol(a,o,fuel,includeClosed));
+  if (env) {
+    try {
+      const units = await getRegionUnits(env);
+      const districts = districtCandidates(units, lat, lon, radius);
+      for (const d of districts) {
+        requests.push(econtrolRegion(d.code, 'PB', fuel, includeClosed));
+      }
+    } catch {
+      // Address-grid search remains the fallback if region data is unavailable.
+    }
+  }
+
+  const batches = await Promise.all(requests);
+  const byId = new Map();
+  for (const list of batches) {
+    for (const station of list) {
+      const id = String(station?.id ?? station?.stationId ??
+        `${station?.location?.latitude}:${station?.location?.longitude}:${station?.name || ''}`);
+      if (!byId.has(id)) byId.set(id, station);
+    }
+  }
+
+  const out = [];
+  for (const station of byId.values()) {
+    const c = coordsFor(station);
+    if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
+    const distance = haversineKm(lat, lon, c.latitude, c.longitude);
+    if (distance <= radius + 0.05) out.push({ ...station, distance });
+  }
+  return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
 }
 
 function priceFor(station, fuel) {
@@ -127,7 +242,8 @@ async function handleApi(request, env) {
       const geo = await geocodeSearch(q);
       if (!geo) return cors(json({ stations: [], location: null, message: 'Ort oder Adresse nicht gefunden.' }));
       const includeClosed = url.searchParams.get('includeClosed') === 'true';
-      const stations = await econtrol(geo.lat, geo.lon, fuel, includeClosed);
+      const radius = Number(url.searchParams.get('radius')) || 10;
+      const stations = await stationsWithinRadius(geo.lat, geo.lon, fuel, includeClosed, radius, env);
       await recordHistory(env, stations, fuel);
       return cors(json({ stations, location: geo }));
     } catch (e) {
@@ -144,7 +260,8 @@ async function handleApi(request, env) {
     }
     try {
       const includeClosed = url.searchParams.get('includeClosed') === 'true';
-      const stations = await econtrol(lat, lon, fuel, includeClosed);
+      const radius = Number(url.searchParams.get('radius')) || 10;
+      const stations = await stationsWithinRadius(lat, lon, fuel, includeClosed, radius, env);
       await recordHistory(env, stations, fuel);
       return cors(json(stations));
     }
