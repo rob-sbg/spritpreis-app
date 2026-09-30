@@ -1,0 +1,17 @@
+{
+  "name": "spritpreis-app-v4-cloudflare",
+  "version": "5.7.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "vapid": "node scripts/generate-vapid.js"
+  },
+  "dependencies": {
+    "@mmmike/web-push": "^1.3.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
