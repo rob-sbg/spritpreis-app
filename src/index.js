@@ -2,6 +2,29 @@ import { sendPushNotification } from '@mmmike/web-push/send';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
+const PETROMAP = 'https://api.petromap.eu/v1/stations/live-at';
+
+function petromapCategory(fuel) {
+  const f = String(fuel || '').toUpperCase();
+  if (f === 'DIE') return 'diesel';
+  if (f === 'GAS') return 'cng';
+  return 'gasoline';
+}
+
+async function petromap(lat, lon, fuel, env = null, radiusKm = 1) {
+  const u = new URL(PETROMAP);
+  u.searchParams.set('lat', String(lat));
+  u.searchParams.set('lng', String(lon));
+  u.searchParams.set('rad', String(Math.max(0.5, Math.min(25, radiusKm))));
+  u.searchParams.set('categoryId', petromapCategory(fuel));
+  u.searchParams.set('currency', 'EUR');
+  const headers = { accept: 'application/json' };
+  if (env?.PETROMAP_API_KEY) headers['x-api-key'] = env.PETROMAP_API_KEY;
+  const r = await fetch(u.toString(), { headers });
+  if (!r.ok) throw new Error(`Petromap HTTP ${r.status}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -176,6 +199,49 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
           }
         } catch {
           // Keep the station visible even if an individual enrichment lookup fails.
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  // E-Control intentionally publishes prices only for the cheapest five
+  // stations per query. Use Petromap as a secondary price source for stations
+  // that are known to E-Control but still have no current price. Petromap's
+  // Austrian live endpoint is refreshed from the national source on access.
+  const stillMissing = out.filter(s => priceFor(s, fuel) == null);
+  if (stillMissing.length) {
+    const queue = [...stillMissing];
+    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+      while (queue.length) {
+        const station = queue.shift();
+        if (!station) return;
+        const c = coordsFor(station);
+        if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
+        try {
+          const candidates = await petromap(c.latitude, c.longitude, fuel, env, 1);
+          let best = null;
+          let bestDistance = Infinity;
+          for (const candidate of candidates) {
+            const clat = Number(candidate?.lat);
+            const clon = Number(candidate?.lon);
+            const d = haversineKm(c.latitude, c.longitude, clat, clon);
+            if (!Number.isFinite(d) || d > 0.35) continue;
+            if (d < bestDistance && Number(candidate?.selectedPrice) > 0) {
+              best = candidate;
+              bestDistance = d;
+            }
+          }
+          if (best) {
+            station.currentPrice = Number(best.selectedPrice);
+            station.priceSource = 'Petromap';
+            station.priceCurrency = best.currency || 'EUR';
+            station.priceUpdatedAt = best.priceLastUpdated || best.priceChangedAt || null;
+            station.priceProductId = best.productId || null;
+          }
+        } catch {
+          // Petromap is a secondary source. Keep the station visible if it is
+          // temporarily unavailable or rate-limited.
         }
       }
     });

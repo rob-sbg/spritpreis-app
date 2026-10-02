@@ -63,3 +63,9 @@ CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E
 
 ### V5.22 Preis-Erreichbarkeit
 Wenn eine Tankstelle im Radius gefunden wird, aber der gewünschte Kraftstoffpreis im Sammelergebnis fehlt, führt der Worker eine gezielte E-Control-Abfrage über die Koordinaten der jeweiligen Tankstelle durch. Die Abfragen laufen mit begrenzter Parallelität, damit auch größere Radien stabil bleiben.
+
+
+## Preisquellen
+- E-Control bleibt die primäre Quelle für Tankstellenbestand und offizielle Preistransparenzdaten.
+- Für österreichische Tankstellen ohne Preis in einer E-Control-Abfrage ergänzt die App den aktuellen Preis über die Petromap Live-API. Petromap verlangt bei Nutzung in der App eine sichtbare Attribution.
+- Optional kann im Cloudflare Worker das Secret `PETROMAP_API_KEY` hinterlegt werden; ohne Key ist die Schnittstelle laut Petromap-Dokumentation für Evaluierung nutzbar.
