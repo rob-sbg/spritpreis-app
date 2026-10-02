@@ -1,4 +1,4 @@
-import { sendPushNotification } from '@mmmike/web-push/send';
+import { sendPushNotification, WebPushError } from '@mmmike/web-push/send';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
@@ -280,35 +280,57 @@ async function handleApi(request, env) {
     try {
       const vapid = await getVapidConfig(env, request.url);
       const subKeys = await listByPrefix(env, 'sub:');
-      let delivered = 0;
+      let delivered = 0, gone = 0, failed = 0;
+      const errors = [];
       for (const subKey of subKeys) {
         const sub = await env.APP_KV.get(subKey, 'json');
         if (!sub) continue;
         try {
-          const ok = await sendPushNotification(sub, {
+          const ok = await sendPushNotification(sub.subscription || sub, {
             title: '⛽ Spritpreis-App',
             body: 'Push-Benachrichtigungen funktionieren.',
             url: '/',
             tag: 'spritpreis-test'
-          }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300 });
-          if (ok) delivered++; else await env.APP_KV.delete(subKey);
+          }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300, urgency: 'high' });
+          if (ok) delivered++; else { gone++; await env.APP_KV.delete(subKey); }
         } catch (err) {
-          if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
+          failed++;
+          if (err instanceof WebPushError) {
+            errors.push({ status: err.statusCode, message: err.message });
+            if (err.statusCode === 404 || err.statusCode === 410) { gone++; await env.APP_KV.delete(subKey); }
+          } else errors.push({ status: null, message: err?.message || String(err) });
         }
       }
-      return cors(json({ ok: delivered > 0, delivered }));
+      return cors(json({ ok: delivered > 0, total: subKeys.length, delivered, gone, failed, errors: errors.slice(0, 5) }));
     } catch (e) {
       return cors(json({ ok: false, error: e.message }, 500));
     }
   }
 
+  if (url.pathname === '/api/push/status' && request.method === 'GET') {
+    try {
+      const vapid = await getVapidConfig(env, request.url);
+      const keys = await listByPrefix(env, 'sub:');
+      let valid = 0, stale = 0;
+      for (const key of keys) {
+        const saved = await env.APP_KV.get(key, 'json');
+        if (!saved) continue;
+        const sub = saved.subscription || saved;
+        if (!sub?.endpoint) { stale++; continue; }
+        if (saved.vapidPublicKey && saved.vapidPublicKey !== vapid.publicKey) stale++; else valid++;
+      }
+      return cors(json({ ok: true, subscriptions: keys.length, valid, stale, publicKey: vapid.publicKey }));
+    } catch (e) { return cors(json({ ok: false, error: e.message }, 500)); }
+  }
+
   if (url.pathname === '/api/push/subscribe' && request.method === 'POST') {
     const body = await request.json().catch(() => null);
     const sub = body?.subscription;
-    if (!sub?.endpoint) return cors(json({ error: 'Ungültige Push-Anmeldung.' }, 400));
+    if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return cors(json({ error: 'Ungültige Push-Anmeldung.' }, 400));
+    const vapid = await getVapidConfig(env, request.url);
     const key = `sub:${await digest(sub.endpoint)}`;
-    await saveJson(env, key, sub);
-    return cors(json({ ok: true }));
+    await saveJson(env, key, { subscription: sub, vapidPublicKey: vapid.publicKey, updatedAt: new Date().toISOString() });
+    return cors(json({ ok: true, endpoint: sub.endpoint, publicKey: vapid.publicKey }));
   }
 
   if (url.pathname === '/api/push/subscribe' && request.method === 'DELETE') {
@@ -373,8 +395,9 @@ async function checkAlarms(env) {
       // do not send another notification every 15 minutes.
       if (isBelow && wasAbove && subKeys.length) {
         for (const subKey of subKeys) {
-          const sub = await env.APP_KV.get(subKey, 'json');
-          if (!sub) continue;
+          const saved = await env.APP_KV.get(subKey, 'json');
+          if (!saved) continue;
+          const sub = saved.subscription || saved;
           try {
             const delivered = await sendPushNotification(sub, {
               title: '⛽ Preisalarm',
@@ -389,7 +412,8 @@ async function checkAlarms(env) {
             if (!delivered) await env.APP_KV.delete(subKey);
             else notified++;
           } catch (err) {
-            if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
+            if (err instanceof WebPushError && (err.statusCode === 404 || err.statusCode === 410)) await env.APP_KV.delete(subKey);
+            else console.log('Push-Zustellung fehlgeschlagen', err?.statusCode || '', err?.message || err);
           }
         }
         alarm.triggeredAt = new Date().toISOString();

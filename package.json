@@ -1,6 +1,6 @@
 {
   "name": "spritpreis-app-v4-cloudflare",
-  "version": "5.7.0",
+  "version": "5.25.0",
   "private": true,
   "type": "module",
   "scripts": {
