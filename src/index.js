@@ -164,18 +164,19 @@ function mergePrices(a, b) {
     const fuel = String(p.fuelType ?? p.fuel ?? '').toUpperCase();
     const raw = p.amount ?? p.price ?? p.value ?? p.priceAmount;
     const n = raw != null && raw !== '' ? Number(String(raw).replace(',', '.')) : NaN;
+    const validPrice = Number.isFinite(n) && n > 0;
     if (fuel) {
       const old = byFuel.get(fuel);
       // Prefer a record with a real numeric price. If both have one, keep the
       // newest occurrence (the later E-Control response is generally fresher).
-      if (!old || (!Number.isFinite(old._num) && Number.isFinite(n)) || Number.isFinite(n)) {
-        byFuel.set(fuel, { ...p, _num: n });
+      if (!old || (!old._valid && validPrice) || (validPrice && old._valid)) {
+        byFuel.set(fuel, { ...p, _num: n, _valid: validPrice });
       }
-    } else if (Number.isFinite(n)) {
-      extras.push({ ...p, _num: n });
+    } else if (validPrice) {
+      extras.push({ ...p, _num: n, _valid: true });
     }
   }
-  const result = [...byFuel.values(), ...extras].map(({_num, ...p}) => p);
+  const result = [...byFuel.values()].filter(x => x._valid).concat(extras).map(({_num, _valid, ...p}) => p);
   return result;
 }
 
@@ -186,7 +187,7 @@ function priceFor(station, fuel) {
   const value = p?.amount ?? p?.price ?? p?.value ?? p?.priceAmount;
   if (value != null && value !== '') {
     const n = Number(String(value).replace(',', '.'));
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n) && n > 0) return n;
   }
   // E-Control's fuel-filtered endpoint normally returns the requested fuel
   // as the only price entry. Use that single entry even if fuelType is absent.
@@ -194,7 +195,7 @@ function priceFor(station, fuel) {
     const single = prices[0];
     const raw = single?.amount ?? single?.price ?? single?.value ?? single?.priceAmount;
     const n = Number(String(raw ?? '').replace(',', '.'));
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n) && n > 0) return n;
   }
   return null;
 }
