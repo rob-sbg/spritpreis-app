@@ -123,7 +123,22 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
     for (const station of list) {
       const id = String(station?.id ?? station?.stationId ??
         `${station?.location?.latitude}:${station?.location?.longitude}:${station?.name || ''}`);
-      if (!byId.has(id)) byId.set(id, station);
+      const existing = byId.get(id);
+      if (!existing) {
+        byId.set(id, station);
+        continue;
+      }
+
+      // The same station can be returned by several grid/district queries.
+      // Keep the record that actually contains the requested fuel price and
+      // merge any richer metadata from the later response.
+      const existingPrice = priceFor(existing, fuel);
+      const newPrice = priceFor(station, fuel);
+      if (existingPrice == null && newPrice != null) {
+        byId.set(id, { ...existing, ...station });
+      } else {
+        byId.set(id, { ...station, ...existing, prices: (existing?.prices?.length || 0) >= (station?.prices?.length || 0) ? existing.prices : station.prices });
+      }
     }
   }
 
@@ -138,9 +153,23 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
 }
 
 function priceFor(station, fuel) {
-  const prices = station?.prices || station?.fuelPrices || [];
-  const p = prices.find(x => x.fuelType === fuel || x.fuel === fuel);
-  return p?.amount ?? p?.price ?? null;
+  const prices = Array.isArray(station?.prices) ? station.prices : (Array.isArray(station?.fuelPrices) ? station.fuelPrices : []);
+  const wanted = String(fuel || '').toUpperCase();
+  const p = prices.find(x => String(x?.fuelType ?? x?.fuel ?? '').toUpperCase() === wanted);
+  const value = p?.amount ?? p?.price ?? p?.value ?? p?.priceAmount;
+  if (value != null && value !== '') {
+    const n = Number(String(value).replace(',', '.'));
+    if (Number.isFinite(n)) return n;
+  }
+  // E-Control's fuel-filtered endpoint normally returns the requested fuel
+  // as the only price entry. Use that single entry even if fuelType is absent.
+  if (prices.length === 1) {
+    const single = prices[0];
+    const raw = single?.amount ?? single?.price ?? single?.value ?? single?.priceAmount;
+    const n = Number(String(raw ?? '').replace(',', '.'));
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
 }
 
 function coordsFor(station) {
