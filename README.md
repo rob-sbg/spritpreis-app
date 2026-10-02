@@ -67,3 +67,9 @@ CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E
 - Nur 404/410 werden automatisch als dauerhaft ungültige Push-Abos gelöscht; temporäre Zustellfehler bleiben erhalten.
 - Push-Test liefert Zustell-/Fehlerstatistik.
 - iOS-PWA Push bleibt an Home-Screen-Installation und sichtbare Notification im Service Worker gebunden.
+
+
+## V5.28 – RMC Kartenakzeptanz
+- RMC-Kennzeichnung auf Tankstellenkarten anhand des aktuellen RMC-Österreich-Stationsplans vom 10.02.2026.
+- Anzeige der RMC-Stationsnummer, wenn eine Tankstelle eindeutig über Adresse/PLZ zugeordnet werden kann.
+- RMC-Daten bleiben getrennt von E-Control-Spritpreisen.

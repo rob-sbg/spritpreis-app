@@ -1,5 +1,6 @@
 import { sendPushNotification, WebPushError } from '@mmmike/web-push/send';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
+import { annotateRmc } from './rmc.js';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
@@ -134,7 +135,7 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
     const distance = haversineKm(lat, lon, c.latitude, c.longitude);
     if (distance <= radius + 0.05) out.push({ ...station, distance });
   }
-  return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
+  return annotateRmc(out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity)));
 }
 
 function priceFor(station, fuel) {
