@@ -140,14 +140,49 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
     }
   }
 
-  const out = [];
+  // Build the exact-radius result first. Some E-Control search responses can
+  // contain a station without its current requested-fuel price even though
+  // the station publishes one. For those stations, make a targeted lookup
+  // using the station's own coordinates. This avoids losing prices merely
+  // because the station was returned by a grid/region query.
+  let out = [];
   for (const station of byId.values()) {
     const c = coordsFor(station);
     if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
     const distance = haversineKm(lat, lon, c.latitude, c.longitude);
     if (distance <= radius + 0.05) out.push({ ...station, distance });
   }
-  return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
+  out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
+
+  const missing = out.filter(s => priceFor(s, fuel) == null);
+  if (missing.length) {
+    // Keep concurrency bounded so larger radii do not create a request burst.
+    const queue = [...missing];
+    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+      while (queue.length) {
+        const station = queue.shift();
+        if (!station) return;
+        const c = coordsFor(station);
+        try {
+          const direct = await econtrol(c.latitude, c.longitude, fuel, includeClosed);
+          const wantedId = String(station?.id ?? station?.stationId ?? '');
+          const exact = direct.find(x => String(x?.id ?? x?.stationId ?? '') === wantedId)
+            || direct.find(x => haversineKm(c.latitude, c.longitude, coordsFor(x).latitude, coordsFor(x).longitude) < 0.15);
+          if (exact) {
+            const mergedPrices = mergePrices(station, exact);
+            station.prices = mergedPrices;
+            if (!station.location && exact.location) station.location = exact.location;
+            if (station.open == null && exact.open != null) station.open = exact.open;
+          }
+        } catch {
+          // Keep the station visible even if an individual enrichment lookup fails.
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  return out;
 }
 
 function priceEntries(station) {

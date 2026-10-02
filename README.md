@@ -59,3 +59,7 @@ Der Aktualisieren-Button lädt nun auch eine aktive Ort-/Adresssuche erneut. Ein
 
 ### V5.16: CNG / Erdgas
 CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E-Control-Fuel-Type `GAS`. CNG funktioniert damit in Standortsuche, Ortssuche, Radius, geschlossenen Tankstellen, Favoriten, Preisverlauf und Preisalarmen.
+
+
+### V5.22 Preis-Erreichbarkeit
+Wenn eine Tankstelle im Radius gefunden wird, aber der gewünschte Kraftstoffpreis im Sammelergebnis fehlt, führt der Worker eine gezielte E-Control-Abfrage über die Koordinaten der jeweiligen Tankstelle durch. Die Abfragen laufen mit begrenzter Parallelität, damit auch größere Radien stabil bleiben.
