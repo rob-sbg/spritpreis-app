@@ -150,13 +150,18 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
   return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
 }
 
+function priceEntries(station) {
+  const out = [];
+  for (const key of ['prices', 'fuelPrices']) {
+    const value = station?.[key];
+    if (Array.isArray(value)) out.push(...value);
+    else if (value && typeof value === 'object') out.push(value);
+  }
+  return out;
+}
+
 function mergePrices(a, b) {
-  const all = [
-    ...(Array.isArray(a?.prices) ? a.prices : []),
-    ...(Array.isArray(a?.fuelPrices) ? a.fuelPrices : []),
-    ...(Array.isArray(b?.prices) ? b.prices : []),
-    ...(Array.isArray(b?.fuelPrices) ? b.fuelPrices : [])
-  ];
+  const all = [...priceEntries(a), ...priceEntries(b)];
   const byFuel = new Map();
   const extras = [];
   for (const p of all) {
@@ -181,7 +186,7 @@ function mergePrices(a, b) {
 }
 
 function priceFor(station, fuel) {
-  const prices = Array.isArray(station?.prices) ? station.prices : (Array.isArray(station?.fuelPrices) ? station.fuelPrices : []);
+  const prices = priceEntries(station);
   const wanted = String(fuel || '').toUpperCase();
   const p = prices.find(x => String(x?.fuelType ?? x?.fuel ?? '').toUpperCase() === wanted);
   const value = p?.amount ?? p?.price ?? p?.value ?? p?.priceAmount;
