@@ -2,29 +2,6 @@ import { sendPushNotification } from '@mmmike/web-push/send';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
-const PETROMAP = 'https://api.petromap.eu/v1/stations/live-at';
-
-function petromapCategory(fuel) {
-  const f = String(fuel || '').toUpperCase();
-  if (f === 'DIE') return 'diesel';
-  if (f === 'GAS') return 'cng';
-  return 'gasoline';
-}
-
-async function petromap(lat, lon, fuel, env = null, radiusKm = 1) {
-  const u = new URL(PETROMAP);
-  u.searchParams.set('lat', String(lat));
-  u.searchParams.set('lng', String(lon));
-  u.searchParams.set('rad', String(Math.max(0.5, Math.min(25, radiusKm))));
-  u.searchParams.set('categoryId', petromapCategory(fuel));
-  u.searchParams.set('currency', 'EUR');
-  const headers = { accept: 'application/json' };
-  if (env?.PETROMAP_API_KEY) headers['x-api-key'] = env.PETROMAP_API_KEY;
-  const r = await fetch(u.toString(), { headers });
-  if (!r.ok) throw new Error(`Petromap HTTP ${r.status}`);
-  const data = await r.json();
-  return Array.isArray(data) ? data : [];
-}
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -146,164 +123,24 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
     for (const station of list) {
       const id = String(station?.id ?? station?.stationId ??
         `${station?.location?.latitude}:${station?.location?.longitude}:${station?.name || ''}`);
-      const existing = byId.get(id);
-      if (!existing) {
-        byId.set(id, station);
-        continue;
-      }
-
-      // The same station can be returned by several grid/district queries.
-      // Keep the record that actually contains the requested fuel price and
-      // merge any richer metadata from the later response.
-      // Merge metadata and prices from every occurrence. Do NOT choose a whole
-      // prices array by length: a later region result can contain a different
-      // subset of fuels and would otherwise hide a valid Super/Diesel price.
-      const mergedPrices = mergePrices(existing, station);
-      byId.set(id, { ...existing, ...station, prices: mergedPrices });
+      if (!byId.has(id)) byId.set(id, station);
     }
   }
 
-  // Build the exact-radius result first. Some E-Control search responses can
-  // contain a station without its current requested-fuel price even though
-  // the station publishes one. For those stations, make a targeted lookup
-  // using the station's own coordinates. This avoids losing prices merely
-  // because the station was returned by a grid/region query.
-  let out = [];
+  const out = [];
   for (const station of byId.values()) {
     const c = coordsFor(station);
     if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
     const distance = haversineKm(lat, lon, c.latitude, c.longitude);
     if (distance <= radius + 0.05) out.push({ ...station, distance });
   }
-  out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
-
-  const missing = out.filter(s => priceFor(s, fuel) == null);
-  if (missing.length) {
-    // Keep concurrency bounded so larger radii do not create a request burst.
-    const queue = [...missing];
-    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
-      while (queue.length) {
-        const station = queue.shift();
-        if (!station) return;
-        const c = coordsFor(station);
-        try {
-          const direct = await econtrol(c.latitude, c.longitude, fuel, includeClosed);
-          const wantedId = String(station?.id ?? station?.stationId ?? '');
-          const exact = direct.find(x => String(x?.id ?? x?.stationId ?? '') === wantedId)
-            || direct.find(x => haversineKm(c.latitude, c.longitude, coordsFor(x).latitude, coordsFor(x).longitude) < 0.15);
-          if (exact) {
-            const mergedPrices = mergePrices(station, exact);
-            station.prices = mergedPrices;
-            if (!station.location && exact.location) station.location = exact.location;
-            if (station.open == null && exact.open != null) station.open = exact.open;
-          }
-        } catch {
-          // Keep the station visible even if an individual enrichment lookup fails.
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  // E-Control intentionally publishes prices only for the cheapest five
-  // stations per query. Use Petromap as a secondary price source for stations
-  // that are known to E-Control but still have no current price. Petromap's
-  // Austrian live endpoint is refreshed from the national source on access.
-  const stillMissing = out.filter(s => priceFor(s, fuel) == null);
-  if (stillMissing.length) {
-    const queue = [...stillMissing];
-    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
-      while (queue.length) {
-        const station = queue.shift();
-        if (!station) return;
-        const c = coordsFor(station);
-        if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
-        try {
-          const candidates = await petromap(c.latitude, c.longitude, fuel, env, 1);
-          let best = null;
-          let bestDistance = Infinity;
-          for (const candidate of candidates) {
-            const clat = Number(candidate?.lat);
-            const clon = Number(candidate?.lon);
-            const d = haversineKm(c.latitude, c.longitude, clat, clon);
-            if (!Number.isFinite(d) || d > 0.35) continue;
-            if (d < bestDistance && Number(candidate?.selectedPrice) > 0) {
-              best = candidate;
-              bestDistance = d;
-            }
-          }
-          if (best) {
-            station.currentPrice = Number(best.selectedPrice);
-            station.priceSource = 'Petromap';
-            station.priceCurrency = best.currency || 'EUR';
-            station.priceUpdatedAt = best.priceLastUpdated || best.priceChangedAt || null;
-            station.priceProductId = best.productId || null;
-          }
-        } catch {
-          // Petromap is a secondary source. Keep the station visible if it is
-          // temporarily unavailable or rate-limited.
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  return out;
-}
-
-function priceEntries(station) {
-  const out = [];
-  for (const key of ['prices', 'fuelPrices']) {
-    const value = station?.[key];
-    if (Array.isArray(value)) out.push(...value);
-    else if (value && typeof value === 'object') out.push(value);
-  }
-  return out;
-}
-
-function mergePrices(a, b) {
-  const all = [...priceEntries(a), ...priceEntries(b)];
-  const byFuel = new Map();
-  const extras = [];
-  for (const p of all) {
-    if (!p || typeof p !== 'object') continue;
-    const fuel = String(p.fuelType ?? p.fuel ?? '').toUpperCase();
-    const raw = p.amount ?? p.price ?? p.value ?? p.priceAmount;
-    const n = raw != null && raw !== '' ? Number(String(raw).replace(',', '.')) : NaN;
-    const validPrice = Number.isFinite(n) && n > 0;
-    if (fuel) {
-      const old = byFuel.get(fuel);
-      // Prefer a record with a real numeric price. If both have one, keep the
-      // newest occurrence (the later E-Control response is generally fresher).
-      if (!old || (!old._valid && validPrice) || (validPrice && old._valid)) {
-        byFuel.set(fuel, { ...p, _num: n, _valid: validPrice });
-      }
-    } else if (validPrice) {
-      extras.push({ ...p, _num: n, _valid: true });
-    }
-  }
-  const result = [...byFuel.values()].filter(x => x._valid).concat(extras).map(({_num, _valid, ...p}) => p);
-  return result;
+  return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
 }
 
 function priceFor(station, fuel) {
-  const prices = priceEntries(station);
-  const wanted = String(fuel || '').toUpperCase();
-  const p = prices.find(x => String(x?.fuelType ?? x?.fuel ?? '').toUpperCase() === wanted);
-  const value = p?.amount ?? p?.price ?? p?.value ?? p?.priceAmount;
-  if (value != null && value !== '') {
-    const n = Number(String(value).replace(',', '.'));
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  // E-Control's fuel-filtered endpoint normally returns the requested fuel
-  // as the only price entry. Use that single entry even if fuelType is absent.
-  if (prices.length === 1) {
-    const single = prices[0];
-    const raw = single?.amount ?? single?.price ?? single?.value ?? single?.priceAmount;
-    const n = Number(String(raw ?? '').replace(',', '.'));
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return null;
+  const prices = station?.prices || station?.fuelPrices || [];
+  const p = prices.find(x => x.fuelType === fuel || x.fuel === fuel);
+  return p?.amount ?? p?.price ?? null;
 }
 
 function coordsFor(station) {
