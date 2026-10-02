@@ -91,7 +91,9 @@ export const RMC_STATIONS = [
   ['ENI','Münchner Bundesstraße 29','5020','Salzburg/Liefering','1670'],
   ['ENI','Salzachtal Bundesstraße 105','5081','Anif','1671'],
   ['ENI','Niederland 218','5091','Unken','1672'],
+  // RMC lists the same Eni station as Halleiner Landesstraße 819; current address is 162 (same phone/station).
   ['ENI','Halleiner Landesstraße 819','5412','Puch-Hallein','1680'],
+  ['ENI','Halleiner Landesstraße 162','5412','Puch-Hallein','1680'],
   ['ENI','Urstein Nord 15','5412','Puch-Hallein','1681'],
   ['ENI','Moosstraße 30','5020','Salzburg','1666'],
   ['ENI','Markt 56','5441','Abtenau','1684'],
