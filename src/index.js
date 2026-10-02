@@ -360,6 +360,42 @@ async function handleApi(request, env) {
     return cors(json({ ok: true }));
   }
 
+  if (url.pathname === '/api/favorites/sync' && request.method === 'POST') {
+    const body = await request.json().catch(() => null);
+    const fuel = body?.fuel || 'SUP';
+    const favorites = Array.isArray(body?.favorites) ? body.favorites : [];
+    if (!['SUP', 'DIE', 'GAS'].includes(fuel)) return cors(json({ error: 'Ungültige Kraftstoffart.' }, 400));
+    const desired = new Map();
+    for (const f of favorites) {
+      const stationId = String(f?.stationId || '');
+      const latitude = Number(f?.latitude), longitude = Number(f?.longitude);
+      if (!stationId || !Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+      const id = `fav:${stationId}:${fuel}`;
+      desired.set(id, {
+        id, stationId, stationName: String(f?.stationName || 'Tankstelle'), fuel,
+        latitude, longitude, lastPrice: null, updatedAt: new Date().toISOString()
+      });
+    }
+    const keys = await listByPrefix(env, 'alarm:');
+    for (const key of keys) await env.APP_KV.delete(key);
+    for (const [id, next] of desired) {
+      const key = `alarm:${id}`;
+      const old = await env.APP_KV.get(key, 'json').catch(() => null);
+      await saveJson(env, key, {
+        ...next,
+        lastPrice: Number.isFinite(Number(old?.lastPrice)) && Number(old.lastPrice) > 0 ? Number(old.lastPrice) : null,
+        lastCheckedAt: old?.lastCheckedAt || null,
+        autoFavorite: true
+      });
+    }
+    const alarms = [];
+    for (const [id] of desired) {
+      const alarm = await env.APP_KV.get(`alarm:${id}`, 'json').catch(() => null);
+      if (alarm) alarms.push(alarm);
+    }
+    return cors(json({ ok: true, alarms }));
+  }
+
   if (url.pathname === '/api/alarms/check' && request.method === 'POST') {
     const result = await checkAlarms(env);
     return cors(json(result));
@@ -385,8 +421,14 @@ async function checkAlarms(env) {
     if (!alarm) continue;
     checked++;
     try {
-      const stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
-      const station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
+      let stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
+      let station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
+      if (!station) {
+        try {
+          stations = await stationsWithinRadius(alarm.latitude, alarm.longitude, alarm.fuel, false, 2, env);
+          station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
+        } catch {}
+      }
       const price = priceFor(station, alarm.fuel);
       if (price == null) {
         noPrice++;
@@ -409,7 +451,7 @@ async function checkAlarms(env) {
           try {
             const delivered = await sendPushNotification(sub, {
               title: '⛽ Preisänderung',
-              body: `${alarm.stationName}: ${previous.toFixed(3).replace('.', ',')} → ${current.toFixed(3).replace('.', ',')} €/L (${direction})`,
+              body: `${alarm.stationName}: ${previous.toFixed(3).replace('.', ',')} → ${current.toFixed(3).replace('.', ',')} ${alarm.fuel === 'GAS' ? '€/kg' : '€/L'} (${direction})`,
               url: '/',
               tag: `price-${alarm.id}-${Date.now()}`
             }, {

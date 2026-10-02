@@ -61,7 +61,7 @@ Der Aktualisieren-Button lädt nun auch eine aktive Ort-/Adresssuche erneut. Ein
 CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E-Control-Fuel-Type `GAS`. CNG funktioniert damit in Standortsuche, Ortssuche, Radius, geschlossenen Tankstellen, Favoriten, Preisverlauf und Preisalarmen.
 
 
-## Push V5.25
+## Push V5.27
 - Push subscriptions werden beim App-Start erneut am Worker synchronisiert.
 - Stale VAPID-Subscriptions werden erkannt und bei erneuter Aktivierung neu angelegt.
 - Nur 404/410 werden automatisch als dauerhaft ungültige Push-Abos gelöscht; temporäre Zustellfehler bleiben erhalten.
