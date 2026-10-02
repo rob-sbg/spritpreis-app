@@ -132,13 +132,11 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
       // The same station can be returned by several grid/district queries.
       // Keep the record that actually contains the requested fuel price and
       // merge any richer metadata from the later response.
-      const existingPrice = priceFor(existing, fuel);
-      const newPrice = priceFor(station, fuel);
-      if (existingPrice == null && newPrice != null) {
-        byId.set(id, { ...existing, ...station });
-      } else {
-        byId.set(id, { ...station, ...existing, prices: (existing?.prices?.length || 0) >= (station?.prices?.length || 0) ? existing.prices : station.prices });
-      }
+      // Merge metadata and prices from every occurrence. Do NOT choose a whole
+      // prices array by length: a later region result can contain a different
+      // subset of fuels and would otherwise hide a valid Super/Diesel price.
+      const mergedPrices = mergePrices(existing, station);
+      byId.set(id, { ...existing, ...station, prices: mergedPrices });
     }
   }
 
@@ -150,6 +148,35 @@ async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiu
     if (distance <= radius + 0.05) out.push({ ...station, distance });
   }
   return out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity));
+}
+
+function mergePrices(a, b) {
+  const all = [
+    ...(Array.isArray(a?.prices) ? a.prices : []),
+    ...(Array.isArray(a?.fuelPrices) ? a.fuelPrices : []),
+    ...(Array.isArray(b?.prices) ? b.prices : []),
+    ...(Array.isArray(b?.fuelPrices) ? b.fuelPrices : [])
+  ];
+  const byFuel = new Map();
+  const extras = [];
+  for (const p of all) {
+    if (!p || typeof p !== 'object') continue;
+    const fuel = String(p.fuelType ?? p.fuel ?? '').toUpperCase();
+    const raw = p.amount ?? p.price ?? p.value ?? p.priceAmount;
+    const n = raw != null && raw !== '' ? Number(String(raw).replace(',', '.')) : NaN;
+    if (fuel) {
+      const old = byFuel.get(fuel);
+      // Prefer a record with a real numeric price. If both have one, keep the
+      // newest occurrence (the later E-Control response is generally fresher).
+      if (!old || (!Number.isFinite(old._num) && Number.isFinite(n)) || Number.isFinite(n)) {
+        byFuel.set(fuel, { ...p, _num: n });
+      }
+    } else if (Number.isFinite(n)) {
+      extras.push({ ...p, _num: n });
+    }
+  }
+  const result = [...byFuel.values(), ...extras].map(({_num, ...p}) => p);
+  return result;
 }
 
 function priceFor(station, fuel) {
