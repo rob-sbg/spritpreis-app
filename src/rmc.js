@@ -208,15 +208,21 @@ export function annotateRmc(stations) {
       const rc = norm(rcity);
       const streetTokens = new Set(street.split(' ').filter(Boolean));
       const rStreetTokens = new Set(rs.split(' ').filter(Boolean));
-      const sharedStreetTokens = [...streetTokens].filter(t => rStreetTokens.has(t));
+      const streetWords = [...streetTokens].filter(t => !/^\d+[a-z]?$/.test(t));
+      const rStreetWords = [...rStreetTokens].filter(t => !/^\d+[a-z]?$/.test(t));
+      const sharedStreetWords = streetWords.filter(t => rStreetTokens.has(t));
       const streetNumbers = (street.match(/\d+[a-z]?/g) || []);
       const rStreetNumbers = (rs.match(/\d+[a-z]?/g) || []);
-      const numberMatch = streetNumbers.length > 0 && streetNumbers.join('|') === rStreetNumbers.join('|');
-      const streetMatch = street === rs || street.includes(rs) || rs.includes(street) || (numberMatch && sharedStreetTokens.length >= 1);
+      const numberMatch = streetNumbers.length > 0 && rStreetNumbers.length > 0 && streetNumbers.join('|') === rStreetNumbers.join('|');
+      // Never match two different streets merely because PLZ + house number are equal.
+      // This is important for places such as Anif, where Alpenstraße 111 and
+      // Salzachtalbundesstraße 111 are different RMC/E-Control stations.
+      const sameStreet = street === rs || street.includes(rs) || rs.includes(street);
+      const streetMatch = sameStreet || (sharedStreetWords.length >= 1 && numberMatch);
       const cityMatch = !city || !rc || city.includes(rc) || rc.includes(city) || city.split(' ').some(token => token.length > 3 && rc.includes(token));
       const nameMatch = !name || norm(rname).split(' ').some(token => token.length > 2 && name.includes(token));
-      const strongAddressMatch = streetMatch && postal && rpostal === postal && (numberMatch || street === rs || street.includes(rs) || rs.includes(street));
-      if ((strongAddressMatch && (nameMatch || sharedStreetTokens.length >= 1)) || (streetMatch && cityMatch && nameMatch)) { hit = { number, name: rname }; break; }
+      const strongAddressMatch = streetMatch && postal && rpostal === postal && numberMatch;
+      if (strongAddressMatch || (sameStreet && postal && rpostal === postal && nameMatch) || (streetMatch && cityMatch && nameMatch && numberMatch)) { hit = { number, name: rname }; break; }
     }
     return hit ? { ...station, rmcAccepted: true, rmcStationNumber: hit.number, rmcSource: 'RMC Finder' } : station;
   });
