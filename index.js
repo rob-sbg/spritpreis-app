@@ -1,5 +1,6 @@
-import { sendPushNotification } from '@mmmike/web-push/send';
+import { sendPushNotification, WebPushError } from '@mmmike/web-push/send';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
+import { annotateRmc } from './rmc.js';
 
 const ECONTROL = 'https://api.e-control.at/sprit/1.0/search/gas-stations/by-address';
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
@@ -19,13 +20,129 @@ async function econtrol(lat, lon, fuel, includeClosed = false) {
   const url = `${ECONTROL}?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&fuelType=${encodeURIComponent(fuel)}&includeClosed=${includeClosed ? 'true' : 'false'}`;
   const r = await fetch(url, { headers: { accept: 'application/json' } });
   if (!r.ok) throw new Error(`E-Control HTTP ${r.status}`);
-  return r.json();
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function econtrolRegion(code, type, fuel, includeClosed = false) {
+  const u = new URL('https://api.e-control.at/sprit/1.0/search/gas-stations/by-region');
+  u.searchParams.set('code', String(code));
+  u.searchParams.set('type', type);
+  u.searchParams.set('fuelType', fuel);
+  u.searchParams.set('includeClosed', includeClosed ? 'true' : 'false');
+  const r = await fetch(u.toString(), { headers: { accept: 'application/json' } });
+  if (!r.ok) throw new Error(`E-Control Regionsuche HTTP ${r.status}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function getRegionUnits(env) {
+  const key = 'system:econtrol-region-units:v1';
+  try {
+    const cached = await env.APP_KV.get(key, 'json');
+    if (Array.isArray(cached) && cached.length) return cached;
+  } catch {}
+  const r = await fetch('https://api.e-control.at/sprit/1.0/regions/units', {
+    headers: { accept: 'application/json' }
+  });
+  if (!r.ok) throw new Error(`E-Control Regionsdaten HTTP ${r.status}`);
+  const data = await r.json();
+  if (!Array.isArray(data)) throw new Error('Ungültige E-Control Regionsdaten');
+  await env.APP_KV.put(key, JSON.stringify(data), { expirationTtl: 86400 });
+  return data;
+}
+
+function districtCandidates(units, lat, lon, radiusKm) {
+  const districts = [];
+  for (const state of units || []) {
+    for (const district of state?.b || []) {
+      const points = (district?.g || [])
+        .map(g => [Number(g?.b), Number(g?.l)])
+        .filter(([a,o]) => Number.isFinite(a) && Number.isFinite(o));
+      if (!points.length) continue;
+      let min = Infinity;
+      for (const [a,o] of points) min = Math.min(min, haversineKm(lat, lon, a, o));
+      districts.push({ code: district.c, name: district.n, minDistance: min });
+    }
+  }
+  // Include all districts that have a municipality reasonably near the circle,
+  // plus a few nearest districts to cover administrative boundaries.
+  return districts
+    .filter(d => d.minDistance <= radiusKm + 35)
+    .sort((a,b) => a.minDistance - b.minDistance)
+    .slice(0, 8);
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+async function stationsWithinRadius(lat, lon, fuel, includeClosed = false, radiusKm = 10, env = null) {
+  const radius = Math.max(1, Math.min(50, Number(radiusKm) || 10));
+
+  // E-Control's address search returns only the ten nearest stations.
+  // Combine several address points with nearby district searches, then
+  // perform the final exact radius filter ourselves.
+  const points = [];
+  const cosLat = Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const stepKm = radius <= 10 ? Math.max(2.5, radius * 0.5) : radius * 0.55;
+  const half = Math.ceil(radius / stepKm);
+  const latStep = stepKm / 111.32;
+  const lonStep = stepKm / (111.32 * cosLat);
+
+  for (let y = -half; y <= half; y++) {
+    for (let x = -half; x <= half; x++) {
+      const pointLat = lat + y * latStep;
+      const pointLon = lon + x * lonStep;
+      if (haversineKm(lat, lon, pointLat, pointLon) <= radius * 1.05) {
+        points.push([pointLat, pointLon]);
+      }
+    }
+  }
+  points.push([lat, lon]);
+
+  const requests = points.map(([a,o]) => econtrol(a,o,fuel,includeClosed));
+  if (env) {
+    try {
+      const units = await getRegionUnits(env);
+      const districts = districtCandidates(units, lat, lon, radius);
+      for (const d of districts) {
+        requests.push(econtrolRegion(d.code, 'PB', fuel, includeClosed));
+      }
+    } catch {
+      // Address-grid search remains the fallback if region data is unavailable.
+    }
+  }
+
+  const batches = await Promise.all(requests);
+  const byId = new Map();
+  for (const list of batches) {
+    for (const station of list) {
+      const id = String(station?.id ?? station?.stationId ??
+        `${station?.location?.latitude}:${station?.location?.longitude}:${station?.name || ''}`);
+      if (!byId.has(id)) byId.set(id, station);
+    }
+  }
+
+  const out = [];
+  for (const station of byId.values()) {
+    const c = coordsFor(station);
+    if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) continue;
+    const distance = haversineKm(lat, lon, c.latitude, c.longitude);
+    if (distance <= radius + 0.05) out.push({ ...station, distance });
+  }
+  return annotateRmc(out.sort((a,b) => (Number(a.distance)||Infinity) - (Number(b.distance)||Infinity)));
 }
 
 function priceFor(station, fuel) {
-  const prices = station?.prices || station?.fuelPrices || [];
-  const p = prices.find(x => x.fuelType === fuel || x.fuel === fuel);
-  return p?.amount ?? p?.price ?? null;
+  const prices = Array.isArray(station?.prices) ? station.prices : (Array.isArray(station?.fuelPrices) ? station.fuelPrices : []);
+  const p = prices.find(x => x?.fuelType === fuel || x?.fuel === fuel);
+  const value = Number(p?.amount ?? p?.price);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function coordsFor(station) {
@@ -120,14 +237,15 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/search' && request.method === 'GET') {
     const q = (url.searchParams.get('q') || '').trim();
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (q.length < 2 || !['SUP', 'DIE'].includes(fuel)) {
+    if (q.length < 2 || !['SUP', 'DIE', 'GAS'].includes(fuel)) {
       return cors(json({ error: 'Bitte mindestens 2 Zeichen eingeben.' }, 400));
     }
     try {
       const geo = await geocodeSearch(q);
       if (!geo) return cors(json({ stations: [], location: null, message: 'Ort oder Adresse nicht gefunden.' }));
       const includeClosed = url.searchParams.get('includeClosed') === 'true';
-      const stations = await econtrol(geo.lat, geo.lon, fuel, includeClosed);
+      const radius = Number(url.searchParams.get('radius')) || 10;
+      const stations = await stationsWithinRadius(geo.lat, geo.lon, fuel, includeClosed, radius, env);
       await recordHistory(env, stations, fuel);
       return cors(json({ stations, location: geo }));
     } catch (e) {
@@ -139,12 +257,13 @@ async function handleApi(request, env) {
     const lat = Number(url.searchParams.get('latitude'));
     const lon = Number(url.searchParams.get('longitude'));
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP', 'DIE'].includes(fuel)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP', 'DIE', 'GAS'].includes(fuel)) {
       return cors(json({ error: 'Ungültige Koordinaten oder Kraftstoffart.' }, 400));
     }
     try {
       const includeClosed = url.searchParams.get('includeClosed') === 'true';
-      const stations = await econtrol(lat, lon, fuel, includeClosed);
+      const radius = Number(url.searchParams.get('radius')) || 10;
+      const stations = await stationsWithinRadius(lat, lon, fuel, includeClosed, radius, env);
       await recordHistory(env, stations, fuel);
       return cors(json(stations));
     }
@@ -154,7 +273,7 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/history' && request.method === 'GET') {
     const stationId = url.searchParams.get('stationId');
     const fuel = url.searchParams.get('fuel') || 'SUP';
-    if (!stationId || !['SUP', 'DIE'].includes(fuel)) return cors(json({ error: 'Ungültige Historienabfrage.' }, 400));
+    if (!stationId || !['SUP', 'DIE', 'GAS'].includes(fuel)) return cors(json({ error: 'Ungültige Historienabfrage.' }, 400));
     const history = await env.APP_KV.get(`hist:${fuel}:${stationId}`, 'json').catch(() => null) || [];
     return cors(json({ history }));
   }
@@ -163,35 +282,57 @@ async function handleApi(request, env) {
     try {
       const vapid = await getVapidConfig(env, request.url);
       const subKeys = await listByPrefix(env, 'sub:');
-      let delivered = 0;
+      let delivered = 0, gone = 0, failed = 0;
+      const errors = [];
       for (const subKey of subKeys) {
         const sub = await env.APP_KV.get(subKey, 'json');
         if (!sub) continue;
         try {
-          const ok = await sendPushNotification(sub, {
+          const ok = await sendPushNotification(sub.subscription || sub, {
             title: '⛽ Spritpreis-App',
             body: 'Push-Benachrichtigungen funktionieren.',
             url: '/',
             tag: 'spritpreis-test'
-          }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300 });
-          if (ok) delivered++; else await env.APP_KV.delete(subKey);
+          }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300, urgency: 'high' });
+          if (ok) delivered++; else { gone++; await env.APP_KV.delete(subKey); }
         } catch (err) {
-          if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
+          failed++;
+          if (err instanceof WebPushError) {
+            errors.push({ status: err.statusCode, message: err.message });
+            if (err.statusCode === 404 || err.statusCode === 410) { gone++; await env.APP_KV.delete(subKey); }
+          } else errors.push({ status: null, message: err?.message || String(err) });
         }
       }
-      return cors(json({ ok: delivered > 0, delivered }));
+      return cors(json({ ok: delivered > 0, total: subKeys.length, delivered, gone, failed, errors: errors.slice(0, 5) }));
     } catch (e) {
       return cors(json({ ok: false, error: e.message }, 500));
     }
   }
 
+  if (url.pathname === '/api/push/status' && request.method === 'GET') {
+    try {
+      const vapid = await getVapidConfig(env, request.url);
+      const keys = await listByPrefix(env, 'sub:');
+      let valid = 0, stale = 0;
+      for (const key of keys) {
+        const saved = await env.APP_KV.get(key, 'json');
+        if (!saved) continue;
+        const sub = saved.subscription || saved;
+        if (!sub?.endpoint) { stale++; continue; }
+        if (saved.vapidPublicKey && saved.vapidPublicKey !== vapid.publicKey) stale++; else valid++;
+      }
+      return cors(json({ ok: true, subscriptions: keys.length, valid, stale, publicKey: vapid.publicKey }));
+    } catch (e) { return cors(json({ ok: false, error: e.message }, 500)); }
+  }
+
   if (url.pathname === '/api/push/subscribe' && request.method === 'POST') {
     const body = await request.json().catch(() => null);
     const sub = body?.subscription;
-    if (!sub?.endpoint) return cors(json({ error: 'Ungültige Push-Anmeldung.' }, 400));
+    if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return cors(json({ error: 'Ungültige Push-Anmeldung.' }, 400));
+    const vapid = await getVapidConfig(env, request.url);
     const key = `sub:${await digest(sub.endpoint)}`;
-    await saveJson(env, key, sub);
-    return cors(json({ ok: true }));
+    await saveJson(env, key, { subscription: sub, vapidPublicKey: vapid.publicKey, updatedAt: new Date().toISOString() });
+    return cors(json({ ok: true, endpoint: sub.endpoint, publicKey: vapid.publicKey }));
   }
 
   if (url.pathname === '/api/push/subscribe' && request.method === 'DELETE') {
@@ -202,13 +343,14 @@ async function handleApi(request, env) {
 
   if (url.pathname === '/api/alarms' && request.method === 'POST') {
     const body = await request.json().catch(() => null);
-    const { id, stationId, stationName, fuel = 'SUP', maxPrice, latitude, longitude } = body || {};
-    if (!id || !stationId || !['SUP', 'DIE'].includes(fuel) || !Number.isFinite(Number(maxPrice)) || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
-      return cors(json({ error: 'Ungültiger Alarm.' }, 400));
+    const { id, stationId, stationName, fuel = 'SUP', maxPrice = null, latitude, longitude } = body || {};
+    if (!id || !stationId || !['SUP', 'DIE', 'GAS'].includes(fuel) || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+      return cors(json({ error: 'Ungültiger Preisänderungsalarm.' }, 400));
     }
     await saveJson(env, `alarm:${id}`, {
       id: String(id), stationId: String(stationId), stationName: String(stationName || 'Tankstelle'),
-      fuel, maxPrice: Number(maxPrice), latitude: Number(latitude), longitude: Number(longitude)
+      fuel, maxPrice: Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : null,
+      latitude, longitude, lastPrice: null
     });
     return cors(json({ ok: true }));
   }
@@ -217,6 +359,42 @@ async function handleApi(request, env) {
     const id = url.pathname.split('/').pop();
     await env.APP_KV.delete(`alarm:${id}`);
     return cors(json({ ok: true }));
+  }
+
+  if (url.pathname === '/api/favorites/sync' && request.method === 'POST') {
+    const body = await request.json().catch(() => null);
+    const fuel = body?.fuel || 'SUP';
+    const favorites = Array.isArray(body?.favorites) ? body.favorites : [];
+    if (!['SUP', 'DIE', 'GAS'].includes(fuel)) return cors(json({ error: 'Ungültige Kraftstoffart.' }, 400));
+    const desired = new Map();
+    for (const f of favorites) {
+      const stationId = String(f?.stationId || '');
+      const latitude = Number(f?.latitude), longitude = Number(f?.longitude);
+      if (!stationId || !Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+      const id = `fav:${stationId}:${fuel}`;
+      desired.set(id, {
+        id, stationId, stationName: String(f?.stationName || 'Tankstelle'), fuel,
+        latitude, longitude, lastPrice: null, updatedAt: new Date().toISOString()
+      });
+    }
+    const keys = await listByPrefix(env, 'alarm:');
+    for (const key of keys) await env.APP_KV.delete(key);
+    for (const [id, next] of desired) {
+      const key = `alarm:${id}`;
+      const old = await env.APP_KV.get(key, 'json').catch(() => null);
+      await saveJson(env, key, {
+        ...next,
+        lastPrice: Number.isFinite(Number(old?.lastPrice)) && Number(old.lastPrice) > 0 ? Number(old.lastPrice) : null,
+        lastCheckedAt: old?.lastCheckedAt || null,
+        autoFavorite: true
+      });
+    }
+    const alarms = [];
+    for (const [id] of desired) {
+      const alarm = await env.APP_KV.get(`alarm:${id}`, 'json').catch(() => null);
+      if (alarm) alarms.push(alarm);
+    }
+    return cors(json({ ok: true, alarms }));
   }
 
   if (url.pathname === '/api/alarms/check' && request.method === 'POST') {
@@ -236,34 +414,47 @@ async function checkAlarms(env) {
   let vapid;
   try { vapid = await getVapidConfig(env); } catch (e) { return { ok: false, reason: `VAPID konnte nicht initialisiert werden: ${e.message}` }; }
   const alarmKeys = await listByPrefix(env, 'alarm:');
-  let checked = 0, notified = 0, removed = 0;
+  let checked = 0, changed = 0, notified = 0, removed = 0, noPrice = 0;
   const subKeys = await listByPrefix(env, 'sub:');
+
   for (const key of alarmKeys) {
     const alarm = await env.APP_KV.get(key, 'json');
     if (!alarm) continue;
     checked++;
     try {
-      const stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
-      await recordHistory(env, stations, alarm.fuel);
-      const station = (stations || []).find(s => String(s.id) === String(alarm.stationId));
+      let stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
+      let station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
+      if (!station) {
+        try {
+          stations = await stationsWithinRadius(alarm.latitude, alarm.longitude, alarm.fuel, false, 2, env);
+          station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
+        } catch {}
+      }
       const price = priceFor(station, alarm.fuel);
-      if (price == null) continue;
+      if (price == null) {
+        noPrice++;
+        continue;
+      }
+
       const current = Number(price);
-      const max = Number(alarm.maxPrice);
-      const wasAbove = alarm.lastPrice == null || Number(alarm.lastPrice) > max;
-      const isBelow = current <= max;
-      // Notify only when the price crosses the threshold. If it remains below,
-      // do not send another notification every 15 minutes.
-      if (isBelow && wasAbove && subKeys.length) {
+      const previous = Number(alarm.lastPrice);
+      const hasPrevious = Number.isFinite(previous) && previous > 0;
+      const isChanged = hasPrevious && Math.abs(current - previous) >= 0.0005;
+
+      // The first successful check only establishes a baseline. Every later
+      // detected price change generates a push notification.
+      if (isChanged) {
+        changed++;
+        const direction = current < previous ? 'gesunken' : 'gestiegen';
         for (const subKey of subKeys) {
           const sub = await env.APP_KV.get(subKey, 'json');
           if (!sub) continue;
           try {
             const delivered = await sendPushNotification(sub, {
-              title: '⛽ Preisalarm',
-              body: `${alarm.stationName}: ${current.toFixed(3).replace('.', ',')} €/L`,
+              title: '⛽ Preisänderung',
+              body: `${alarm.stationName}: ${previous.toFixed(3).replace('.', ',')} → ${current.toFixed(3).replace('.', ',')} ${alarm.fuel === 'GAS' ? '€/kg' : '€/L'} (${direction})`,
               url: '/',
-              tag: `alarm-${alarm.id}`
+              tag: `price-${alarm.id}-${Date.now()}`
             }, {
               subject: vapid.subject,
               publicKey: vapid.publicKey,
@@ -275,17 +466,16 @@ async function checkAlarms(env) {
             if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
           }
         }
-        alarm.triggeredAt = new Date().toISOString();
       }
-      // The alarm remains active. Once the price rises above the limit it is
-      // re-armed automatically and can notify again on a later crossing.
+
       alarm.lastPrice = current;
+      alarm.lastCheckedAt = new Date().toISOString();
       await saveJson(env, key, alarm);
     } catch (err) {
-      console.log('Alarmprüfung fehlgeschlagen', err?.message || err);
+      console.log('Preisänderungsprüfung fehlgeschlagen', err?.message || err);
     }
   }
-  return { ok: true, checked, notified, removed };
+  return { ok: true, checked, changed, notified, noPrice, removed };
 }
 
 export default {

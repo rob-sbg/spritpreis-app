@@ -73,3 +73,8 @@ CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E
 - RMC-Kennzeichnung auf Tankstellenkarten anhand des aktuellen RMC-Österreich-Stationsplans vom 10.02.2026.
 - Anzeige der RMC-Stationsnummer, wenn eine Tankstelle eindeutig über Adresse/PLZ zugeordnet werden kann.
 - RMC-Daten bleiben getrennt von E-Control-Spritpreisen.
+
+
+V5.30: RMC-Abgleich erweitert um die Salzburger Turmöl-Stationen 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
+
+V5.30: RMC-Abgleich erweitert um Turmöl 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
