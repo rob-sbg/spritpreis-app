@@ -176,13 +176,21 @@ export const RMC_STATIONS = [
   ['Turmöl','Kr AT, Linzerstraße 54','4531','Kematen an der Krems','500'],
   ['Turmöl','Linzerstrasse 92a','4600','Wels','609'],
   ['Turmöl','BAHNHOFSTR.15','4540','Bad Hall','503'],
-  ['Turmöl','Salzburgerstraße 103','4820','Bad Ischl','505']
+  ['Turmöl','Salzburgerstraße 103','4820','Bad Ischl','505'],
+  ['Turmöl','Aignerstraße 22','5020','Salzburg','1433'],
+  ['Turmöl','Linzer Bundesstraße 5','5020','Salzburg','1434'],
+  ['Turmöl','Innsbrucker Bundesstraße 97','5020','Salzburg-Flughafen','1435'],
+  ['Turmöl','Franz-Brötznerstraße 2','5073','Salzburg-Wals','1436']
 ];
 
 const norm = value => String(value || '')
   .toLowerCase()
   .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
   .replace(/straße/g,'strasse')
+  .replace(/\bstr\.?\b/g,'strasse')
+  .replace(/\bstrasse\b/g,'strasse')
+  .replace(/bundesstrasse/g,'bundesstrasse')
+  .replace(/landesstrasse/g,'landesstrasse')
   .replace(/[^a-z0-9]+/g,' ')
   .trim().replace(/\s+/g,' ');
 
@@ -198,10 +206,17 @@ export function annotateRmc(stations) {
       if (postal && rpostal !== postal) continue;
       const rs = norm(rstreet);
       const rc = norm(rcity);
-      const streetMatch = street === rs || street.includes(rs) || rs.includes(street);
+      const streetTokens = new Set(street.split(' ').filter(Boolean));
+      const rStreetTokens = new Set(rs.split(' ').filter(Boolean));
+      const sharedStreetTokens = [...streetTokens].filter(t => rStreetTokens.has(t));
+      const streetNumbers = (street.match(/\d+[a-z]?/g) || []);
+      const rStreetNumbers = (rs.match(/\d+[a-z]?/g) || []);
+      const numberMatch = streetNumbers.length > 0 && streetNumbers.join('|') === rStreetNumbers.join('|');
+      const streetMatch = street === rs || street.includes(rs) || rs.includes(street) || (numberMatch && sharedStreetTokens.length >= 1);
       const cityMatch = !city || !rc || city.includes(rc) || rc.includes(city) || city.split(' ').some(token => token.length > 3 && rc.includes(token));
       const nameMatch = !name || norm(rname).split(' ').some(token => token.length > 2 && name.includes(token));
-      if (streetMatch && cityMatch && (nameMatch || (postal && rstreet && street === rs))) { hit = { number, name: rname }; break; }
+      const strongAddressMatch = streetMatch && postal && rpostal === postal && (numberMatch || street === rs || street.includes(rs) || rs.includes(street));
+      if ((strongAddressMatch && (nameMatch || sharedStreetTokens.length >= 1)) || (streetMatch && cityMatch && nameMatch)) { hit = { number, name: rname }; break; }
     }
     return hit ? { ...station, rmcAccepted: true, rmcStationNumber: hit.number, rmcSource: 'RMC Finder' } : station;
   });
