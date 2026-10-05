@@ -78,3 +78,6 @@ CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E
 V5.30: RMC-Abgleich erweitert um die Salzburger Turmöl-Stationen 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
 
 V5.30: RMC-Abgleich erweitert um Turmöl 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
+
+
+V5.34: RS-Logo aus dem Header entfernt und durch „Finde den besten Spritpreis in deiner Umgebung!“ ersetzt.
