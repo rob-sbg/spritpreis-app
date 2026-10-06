@@ -270,6 +270,29 @@ async function handleApi(request, env) {
     catch (e) { return cors(json({ error: 'E-Control konnte nicht erreicht werden.', detail: e.message }, 502)); }
   }
 
+  if (url.pathname === '/api/favorite-price' && request.method === 'GET') {
+    const stationId = String(url.searchParams.get('stationId') || '');
+    const lat = Number(url.searchParams.get('latitude'));
+    const lon = Number(url.searchParams.get('longitude'));
+    const fuel = url.searchParams.get('fuel') || 'SUP';
+    if (!stationId || !Number.isFinite(lat) || !Number.isFinite(lon) || !['SUP','DIE','GAS'].includes(fuel)) {
+      return cors(json({ error: 'Ungültige Favoritenabfrage.' }, 400));
+    }
+    try {
+      let stations = await econtrol(lat, lon, fuel, false);
+      let station = (stations || []).find(s => String(s?.id ?? s?.stationId) === stationId);
+      if (!station) {
+        stations = await stationsWithinRadius(lat, lon, fuel, false, 2, env);
+        station = (stations || []).find(s => String(s?.id ?? s?.stationId) === stationId);
+      }
+      if (!station) return cors(json({ station: null, price: null }));
+      const price = priceFor(station, fuel);
+      return cors(json({ station, price: price == null ? null : Number(price) }));
+    } catch (e) {
+      return cors(json({ error: 'Favoritenpreis konnte nicht aktualisiert werden.', detail: e.message }, 502));
+    }
+  }
+
   if (url.pathname === '/api/history' && request.method === 'GET') {
     const stationId = url.searchParams.get('stationId');
     const fuel = url.searchParams.get('fuel') || 'SUP';
