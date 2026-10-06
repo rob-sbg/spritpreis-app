@@ -45,6 +45,7 @@ export const RMC_STATIONS = [
   ['A1','Sternweg 22','8141','Zettling','1296'],
   ['Leitner','Anton-Hermann-Strasse 3','8073','Feldkirchen bei Graz','1299'],
   ['Lagerhaus','Pichl 251','4575','Rossleithen','1319'],
+  ['Lagerhaus','Lagerhausstraße 2','5071','Wals','1252'],
   ['Lagerhaus','Harlochnerstraße 1','5230','Mattighofen','1320'],
   ['Lagerhaus','Moosham 35','4943','Geinberg','1321'],
   ['Lagerhaus','Gundertshausen 79','5142','Eggelsberg','1334'],

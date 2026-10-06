@@ -1,3 +1,5 @@
+V5.42: RMC-Matching für Lagerhaus Wals (Lagerhausstraße 2, 5071 Wals, RMC 1252) ergänzt.
+
 # Spritpreis-App V5 – Cloudflare
 
 Neue Funktionen:
