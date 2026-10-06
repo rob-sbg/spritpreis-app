@@ -17,7 +17,7 @@ function cors(response) {
 }
 
 async function econtrol(lat, lon, fuel, includeClosed = false) {
-  const url = `${ECONTROL}?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&fuelType=${encodeURIComponent(fuel)}&includeClosed=${includeClosed ? 'true' : 'false'}`;
+  const url = `${ECONTROL}?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&fuelType=${encodeURIComponent(fuel)}&includeClosed=${includeClosed ? 'true' : 'false'}&_=${Date.now()}`;
   const r = await fetch(url, { headers: { accept: 'application/json' } });
   if (!r.ok) throw new Error(`E-Control HTTP ${r.status}`);
   const data = await r.json();
