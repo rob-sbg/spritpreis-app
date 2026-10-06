@@ -1,5 +1,9 @@
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', event => event.waitUntil((async () => {
+  const names = await caches.keys();
+  await Promise.all(names.map(name => caches.delete(name)));
+  await self.clients.claim();
+})()));
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
@@ -8,7 +12,11 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(event.request, { cache: 'no-store' }));
     return;
   }
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(fetch(event.request, { cache: 'no-store' }).catch(() => caches.match('/index.html')));
+    return;
+  }
+  event.respondWith(fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request)));
 });
 
 self.addEventListener('push', event => {

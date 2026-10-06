@@ -18,7 +18,7 @@ function cors(response) {
 
 async function econtrol(lat, lon, fuel, includeClosed = false) {
   const url = `${ECONTROL}?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&fuelType=${encodeURIComponent(fuel)}&includeClosed=${includeClosed ? 'true' : 'false'}&_=${Date.now()}`;
-  const r = await fetch(url, { headers: { accept: 'application/json' } });
+  const r = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json', 'cache-control': 'no-cache' } });
   if (!r.ok) throw new Error(`E-Control HTTP ${r.status}`);
   const data = await r.json();
   return Array.isArray(data) ? data : [];
@@ -30,7 +30,7 @@ async function econtrolRegion(code, type, fuel, includeClosed = false) {
   u.searchParams.set('type', type);
   u.searchParams.set('fuelType', fuel);
   u.searchParams.set('includeClosed', includeClosed ? 'true' : 'false');
-  const r = await fetch(u.toString(), { headers: { accept: 'application/json' } });
+  const r = await fetch(u.toString(), { cache: 'no-store', headers: { accept: 'application/json', 'cache-control': 'no-cache' } });
   if (!r.ok) throw new Error(`E-Control Regionsuche HTTP ${r.status}`);
   const data = await r.json();
   return Array.isArray(data) ? data : [];
@@ -482,7 +482,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/')) return handleApi(request, env);
-    return env.ASSETS.fetch(request);
+    const response = await env.ASSETS.fetch(request);
+    const h = new Headers(response.headers);
+    // The iOS Home-Screen PWA must not keep an old HTML/service-worker shell.
+    // Always revalidate static app assets so the installed PWA gets the current release.
+    h.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+    h.set('pragma', 'no-cache');
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers: h });
   },
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(checkAlarms(env));
