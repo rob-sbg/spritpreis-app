@@ -400,11 +400,19 @@ async function handleApi(request, env) {
         latitude, longitude, lastPrice: null, updatedAt: new Date().toISOString()
       });
     }
+    // Preserve existing alarm state BEFORE replacing the alarm set.
+    // Otherwise every favorite sync would reset lastPrice to null and the
+    // scheduled checker could never see a second price change.
     const keys = await listByPrefix(env, 'alarm:');
+    const previous = new Map();
+    for (const key of keys) {
+      const saved = await env.APP_KV.get(key, 'json').catch(() => null);
+      if (saved) previous.set(key, saved);
+    }
     for (const key of keys) await env.APP_KV.delete(key);
     for (const [id, next] of desired) {
       const key = `alarm:${id}`;
-      const old = await env.APP_KV.get(key, 'json').catch(() => null);
+      const old = previous.get(key);
       await saveJson(env, key, {
         ...next,
         lastPrice: Number.isFinite(Number(old?.lastPrice)) && Number(old.lastPrice) > 0 ? Number(old.lastPrice) : null,

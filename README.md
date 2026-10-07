@@ -1,3 +1,5 @@
+V5.43: Push-Fix – Favoriten-Sync bewahrt bestehende Alarm-Baselines (`lastPrice`), damit Preisänderungen wieder erkannt und als Push versendet werden. Service Worker auf 543 aktualisiert.
+
 V5.42: RMC-Matching für Lagerhaus Wals (Lagerhausstraße 2, 5071 Wals, RMC 1252) ergänzt.
 
 # Spritpreis-App V5 – Cloudflare
