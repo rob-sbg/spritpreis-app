@@ -473,8 +473,14 @@ async function findFavoriteStationPrice(alarm, env) {
 }
 
 async function checkAlarms(env) {
+  const startedAt = new Date().toISOString();
+  await env.APP_KV.put('system:last-alarm-check', JSON.stringify({ status: 'running', startedAt }), { expirationTtl: 60 * 60 * 24 * 7 }).catch(() => {});
   let vapid;
-  try { vapid = await getVapidConfig(env); } catch (e) { return { ok: false, reason: `VAPID konnte nicht initialisiert werden: ${e.message}` }; }
+  try { vapid = await getVapidConfig(env); } catch (e) {
+    const failed = { ok: false, status: 'failed', startedAt, finishedAt: new Date().toISOString(), reason: `VAPID konnte nicht initialisiert werden: ${e.message}` };
+    await env.APP_KV.put('system:last-alarm-check', JSON.stringify(failed), { expirationTtl: 60 * 60 * 24 * 7 }).catch(() => {});
+    return failed;
+  }
   const alarmKeys = await listByPrefix(env, 'alarm:');
   let checked = 0, changed = 0, notified = 0, removed = 0, noPrice = 0, errors = 0;
   const subKeys = await listByPrefix(env, 'sub:');
@@ -546,7 +552,7 @@ async function checkAlarms(env) {
       await saveJson(env, key, alarm).catch(() => {});
     }
   }
-  const result = { ok: true, checked, changed, notified, noPrice, removed, errors, subscriptions: subKeys.length, checkedAt: new Date().toISOString(), results: results.slice(0, 50) };
+  const result = { ok: true, status: 'completed', startedAt, checked, changed, notified, noPrice, removed, errors, subscriptions: subKeys.length, checkedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), results: results.slice(0, 50) };
   await env.APP_KV.put('system:last-alarm-check', JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 }).catch(() => {});
   return result;
 }
@@ -564,6 +570,8 @@ export default {
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers: h });
   },
   async scheduled(_event, env, ctx) {
-    ctx.waitUntil(checkAlarms(env));
+    // Await the alarm run so the scheduled invocation owns the full execution.
+    // This also makes the heartbeat prove that Cloudflare actually ran the cron.
+    await checkAlarms(env);
   }
 };
