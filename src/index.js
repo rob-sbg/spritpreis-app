@@ -433,6 +433,18 @@ async function handleApi(request, env) {
     return cors(json(result));
   }
 
+  if (url.pathname === '/api/alarms/status' && request.method === 'GET') {
+    const last = await env.APP_KV.get('system:last-alarm-check', 'json').catch(() => null);
+    const alarmKeys = await listByPrefix(env, 'alarm:');
+    const alarms = [];
+    for (const key of alarmKeys) {
+      const a = await env.APP_KV.get(key, 'json').catch(() => null);
+      if (a) alarms.push({ stationId: a.stationId, stationName: a.stationName, fuel: a.fuel, lastPrice: a.lastPrice, lastCheckedAt: a.lastCheckedAt, lastCheckResult: a.lastCheckResult, lastCheckSource: a.lastCheckSource, lastCheckError: a.lastCheckError });
+    }
+    const subscriptions = (await listByPrefix(env, 'sub:')).length;
+    return cors(json({ ok: true, subscriptions, alarms, lastCheck: last }));
+  }
+
   return cors(json({ error: 'Nicht gefunden.' }, 404));
 }
 
@@ -441,29 +453,47 @@ async function digest(value) {
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function findFavoriteStationPrice(alarm, env) {
+  const stationId = String(alarm.stationId);
+  const attempts = [2, 5, 10];
+  let lastError = null;
+  try {
+    let stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
+    let station = (stations || []).find(s => String(s?.id ?? s?.stationId) === stationId);
+    if (station) return { station, price: priceFor(station, alarm.fuel), source: 'econtrol-direct' };
+  } catch (e) { lastError = e; }
+  for (const radius of attempts) {
+    try {
+      const stations = await stationsWithinRadius(alarm.latitude, alarm.longitude, alarm.fuel, false, radius, env);
+      const station = (stations || []).find(s => String(s?.id ?? s?.stationId) === stationId);
+      if (station) return { station, price: priceFor(station, alarm.fuel), source: `radius-${radius}km` };
+    } catch (e) { lastError = e; }
+  }
+  return { station: null, price: null, source: 'not-found', error: lastError?.message || null };
+}
+
 async function checkAlarms(env) {
   let vapid;
   try { vapid = await getVapidConfig(env); } catch (e) { return { ok: false, reason: `VAPID konnte nicht initialisiert werden: ${e.message}` }; }
   const alarmKeys = await listByPrefix(env, 'alarm:');
-  let checked = 0, changed = 0, notified = 0, removed = 0, noPrice = 0;
+  let checked = 0, changed = 0, notified = 0, removed = 0, noPrice = 0, errors = 0;
   const subKeys = await listByPrefix(env, 'sub:');
+  const results = [];
 
   for (const key of alarmKeys) {
     const alarm = await env.APP_KV.get(key, 'json');
     if (!alarm) continue;
     checked++;
     try {
-      let stations = await econtrol(alarm.latitude, alarm.longitude, alarm.fuel, false);
-      let station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
-      if (!station) {
-        try {
-          stations = await stationsWithinRadius(alarm.latitude, alarm.longitude, alarm.fuel, false, 2, env);
-          station = (stations || []).find(s => String(s?.id ?? s?.stationId) === String(alarm.stationId));
-        } catch {}
-      }
-      const price = priceFor(station, alarm.fuel);
+      const found = await findFavoriteStationPrice(alarm, env);
+      const price = found.price;
       if (price == null) {
         noPrice++;
+        results.push({ stationId: alarm.stationId, stationName: alarm.stationName, ok: false, reason: found.source, error: found.error || null });
+        alarm.lastCheckedAt = new Date().toISOString();
+        alarm.lastCheckResult = found.source;
+        alarm.lastCheckError = found.error || null;
+        await saveJson(env, key, alarm);
         continue;
       }
 
@@ -471,9 +501,8 @@ async function checkAlarms(env) {
       const previous = Number(alarm.lastPrice);
       const hasPrevious = Number.isFinite(previous) && previous > 0;
       const isChanged = hasPrevious && Math.abs(current - previous) >= 0.0005;
+      let deliveredForAlarm = 0;
 
-      // The first successful check only establishes a baseline. Every later
-      // detected price change generates a push notification.
       if (isChanged) {
         changed++;
         const direction = current < previous ? 'gesunken' : 'gestiegen';
@@ -481,19 +510,20 @@ async function checkAlarms(env) {
           const sub = await env.APP_KV.get(subKey, 'json');
           if (!sub) continue;
           try {
-            const delivered = await sendPushNotification(sub, {
+            const delivered = await sendPushNotification(sub.subscription || sub, {
               title: '⛽ Preisänderung',
               body: `${alarm.stationName}: ${previous.toFixed(3).replace('.', ',')} → ${current.toFixed(3).replace('.', ',')} ${alarm.fuel === 'GAS' ? '€/kg' : '€/L'} (${direction})`,
               url: '/',
               tag: `price-${alarm.id}-${Date.now()}`
-            }, {
-              subject: vapid.subject,
-              publicKey: vapid.publicKey,
-              privateKey: vapid.privateKey
-            }, { ttl: 3600 });
-            if (!delivered) await env.APP_KV.delete(subKey);
-            else notified++;
+            }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 3600, urgency: 'high' });
+            if (!delivered) {
+              await env.APP_KV.delete(subKey);
+            } else {
+              notified++;
+              deliveredForAlarm++;
+            }
           } catch (err) {
+            errors++;
             if (err?.statusCode === 404 || err?.statusCode === 410) await env.APP_KV.delete(subKey);
           }
         }
@@ -501,12 +531,24 @@ async function checkAlarms(env) {
 
       alarm.lastPrice = current;
       alarm.lastCheckedAt = new Date().toISOString();
+      alarm.lastCheckResult = isChanged ? `changed:${deliveredForAlarm}` : 'ok';
+      alarm.lastCheckSource = found.source;
+      alarm.lastCheckError = null;
       await saveJson(env, key, alarm);
+      results.push({ stationId: alarm.stationId, stationName: alarm.stationName, ok: true, current, previous: hasPrevious ? previous : null, changed: isChanged, notified: deliveredForAlarm, source: found.source });
     } catch (err) {
+      errors++;
       console.log('Preisänderungsprüfung fehlgeschlagen', err?.message || err);
+      results.push({ stationId: alarm.stationId, stationName: alarm.stationName, ok: false, reason: 'exception', error: err?.message || String(err) });
+      alarm.lastCheckedAt = new Date().toISOString();
+      alarm.lastCheckResult = 'exception';
+      alarm.lastCheckError = err?.message || String(err);
+      await saveJson(env, key, alarm).catch(() => {});
     }
   }
-  return { ok: true, checked, changed, notified, noPrice, removed };
+  const result = { ok: true, checked, changed, notified, noPrice, removed, errors, subscriptions: subKeys.length, checkedAt: new Date().toISOString(), results: results.slice(0, 50) };
+  await env.APP_KV.put('system:last-alarm-check', JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 }).catch(() => {});
+  return result;
 }
 
 export default {
