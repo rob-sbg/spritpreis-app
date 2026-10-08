@@ -85,3 +85,9 @@ V5.30: RMC-Abgleich erweitert um Turmöl 1433–1436 und tolerantere Straßen-/A
 
 
 V5.34: RS-Logo aus dem Header entfernt und durch „Finde den besten Spritpreis in deiner Umgebung!“ ersetzt.
+
+
+## V5.46 Push-Diagnose
+- `/api/push/alarm-test` sendet einen Test mit exakt denselben Web-Push-Versandparametern wie der automatische Preisalarm.
+- `/api/alarms/status` enthält zusätzlich `lastPushTest`.
+- Automatische Preisalarme verwenden TTL 300 Sekunden und den gleichen Versandweg wie der funktionierende Test-Push.

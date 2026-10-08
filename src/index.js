@@ -332,6 +332,40 @@ async function handleApi(request, env) {
     }
   }
 
+  if (url.pathname === '/api/push/alarm-test' && request.method === 'POST') {
+    try {
+      const vapid = await getVapidConfig(env, request.url);
+      const subKeys = await listByPrefix(env, 'sub:');
+      const body = {
+        title: '⛽ Spritpreis-App – Preisalarm-Test',
+        body: 'Dieser Test verwendet exakt den Versandweg der automatischen Preisalarme.',
+        url: '/',
+        tag: 'spritpreis-alarm-test'
+      };
+      let delivered = 0, gone = 0, failed = 0;
+      const results = [];
+      for (const subKey of subKeys) {
+        const sub = await env.APP_KV.get(subKey, 'json');
+        if (!sub) continue;
+        try {
+          const ok = await sendPushNotification(sub.subscription || sub, body,
+            { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey },
+            { ttl: 300, urgency: 'high' });
+          if (ok) { delivered++; results.push({ key: subKey, ok: true }); }
+          else { gone++; await env.APP_KV.delete(subKey); results.push({ key: subKey, ok: false, reason: 'gone' }); }
+        } catch (err) {
+          failed++;
+          const status = err?.statusCode ?? null;
+          if (status === 404 || status === 410) { gone++; await env.APP_KV.delete(subKey); }
+          results.push({ key: subKey, ok: false, status, error: err?.message || String(err) });
+        }
+      }
+      const result = { ok: delivered > 0, total: subKeys.length, delivered, gone, failed, body, results: results.slice(0, 20), testedAt: new Date().toISOString() };
+      await env.APP_KV.put('system:last-alarm-push-test', JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 }).catch(() => {});
+      return cors(json(result));
+    } catch (e) { return cors(json({ ok: false, error: e.message }, 500)); }
+  }
+
   if (url.pathname === '/api/push/status' && request.method === 'GET') {
     try {
       const vapid = await getVapidConfig(env, request.url);
@@ -442,7 +476,8 @@ async function handleApi(request, env) {
       if (a) alarms.push({ stationId: a.stationId, stationName: a.stationName, fuel: a.fuel, lastPrice: a.lastPrice, lastCheckedAt: a.lastCheckedAt, lastCheckResult: a.lastCheckResult, lastCheckSource: a.lastCheckSource, lastCheckError: a.lastCheckError });
     }
     const subscriptions = (await listByPrefix(env, 'sub:')).length;
-    return cors(json({ ok: true, subscriptions, alarms, lastCheck: last }));
+    const lastPushTest = await env.APP_KV.get('system:last-alarm-push-test', 'json').catch(() => null);
+    return cors(json({ ok: true, subscriptions, alarms, lastCheck: last, lastPushTest }));
   }
 
   return cors(json({ error: 'Nicht gefunden.' }, 404));
@@ -520,8 +555,8 @@ async function checkAlarms(env) {
               title: '⛽ Preisänderung',
               body: `${alarm.stationName}: ${previous.toFixed(3).replace('.', ',')} → ${current.toFixed(3).replace('.', ',')} ${alarm.fuel === 'GAS' ? '€/kg' : '€/L'} (${direction})`,
               url: '/',
-              tag: `price-${alarm.id}-${Date.now()}`
-            }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 3600, urgency: 'high' });
+              tag: `price-${alarm.stationId}`
+            }, { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey }, { ttl: 300, urgency: 'high' });
             if (!delivered) {
               await env.APP_KV.delete(subKey);
             } else {
