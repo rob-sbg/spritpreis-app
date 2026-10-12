@@ -1,93 +1,11 @@
-V5.43: Push-Fix – Favoriten-Sync bewahrt bestehende Alarm-Baselines (`lastPrice`), damit Preisänderungen wieder erkannt und als Push versendet werden. Service Worker auf 543 aktualisiert.
+# Spritpreise – V5.47
 
-V5.42: RMC-Matching für Lagerhaus Wals (Lagerhausstraße 2, 5071 Wals, RMC 1252) ergänzt.
+V5.47 entfernt die RMC-Kennzeichnung vollständig aus der App.
 
-# Spritpreis-App V5 – Cloudflare
+- RMC-Badges und der Hinweis zur RMC-Kartenakzeptanz wurden aus der Oberfläche entfernt.
+- Die RMC-Daten und die serverseitige RMC-Zuordnungslogik wurden entfernt.
+- Live-Preise, Favoriten, Push-Alarme, Diagnose, Preisverlauf, Suche, Radius und Routen bleiben erhalten.
 
-Neue Funktionen:
-- Preisalarm bleibt aktiv und benachrichtigt nur beim Überschreiten/Unterschreiten des Preislimits (kein 15-Minuten-Spam).
-- Preisverlauf je Tankstelle/Kraftstoff, gespeichert in Cloudflare KV.
-- Günstigste Tankstelle wird hervorgehoben.
-- Interaktive OpenStreetMap/Leaflet-Karte.
-- PWA + Web Push für iPhone Home-Screen-App.
+## Deploy
 
-## Deployment
-1. Inhalt dieses Ordners in das GitHub-Repository `spritpreis-app` übernehmen.
-2. Cloudflare Workers Build: Build-Befehl leer, Deploy-Befehl `npx wrangler deploy`.
-3. `wrangler.jsonc` enthält das KV-Binding `APP_KV`. Falls du eine andere KV-Namespace-ID verwendest, dort die ID ersetzen.
-4. Nach dem Deployment App auf dem iPhone neu laden.
-
-Hinweis: Der Preisverlauf wird bei Preisabfragen und Alarmprüfungen aufgebaut. Für eine vollständige Historie braucht die App daher einige Messzyklen.
-
-
-## V5.12 – Suchradius
-- Suchradius 2, 5, 10, 20, 30 oder 50 km
-- Radius wird lokal gespeichert
-- Suche und Standortabfrage berücksichtigen den Radius
-- Favoriten werden nicht durch den Radius entfernt
-- Für größere Radien werden mehrere E-Control-Standortabfragen zusammengeführt und anschließend exakt nach Luftlinie gefiltert
-
-
-### Radius-Suche V5.12
-Die Radius-Suche verwendet mehrere geografische Abfragepunkte, da E-Control pro Koordinate nur die nächstgelegenen Tankstellen liefert. Die Ergebnisse werden zusammengeführt und anschließend exakt nach Luftlinienentfernung gefiltert.
-
-
-### V5.12: Vollständigere Radius-Suche
-Zusätzlich zur Mehrpunkt-Adresssuche werden nahe politische Bezirke über die offizielle E-Control-Regionssuche abgefragt. Danach werden alle Treffer nach exakter Luftlinienentfernung zum Suchpunkt gefiltert. Damit werden in dicht besiedelten Gebieten deutlich mehr Tankstellen gefunden.
-
-
-### V5.12: Ortssuche zeigt alle Treffer im Radius
-Wenn eine Orts-/Adresssuche bereits Tankstellen für den gewählten Radius geladen hat, wird der Suchtext nicht nochmals als Namens-/Adressfilter angewendet. Dadurch werden z. B. bei „Hallein“ alle gefundenen Tankstellen im Radius angezeigt, nicht nur Stationen, deren Adresse selbst „Hallein“ enthält.
-
-
-## V5.12 – vollständiges Release
-Dieses Paket enthält den vollständigen Projektstand mit:
-- iPhone/PWA-Persistenz und automatischer Wiederherstellung
-- Favoriten inklusive Speicherung vollständiger Tankstellendaten
-- mehreren unabhängigen Preisalarmen
-- Anzeige geöffneter und geschlossener Tankstellen
-- frei wählbarem Suchradius
-- erweiterter Radius-/Ortssuche mit mehreren E-Control-Abfragen
-- Ortssuche ohne nachträglichen Textfilter auf die gefundenen Radius-Treffer
-
-Die ZIP enthält bewusst die vollständigen Verzeichnisse `src/`, `public/` und `scripts/`.
-
-
-### V5.13: App-Logo
-Das bereitgestellte Logo ist als transparenter `public/logo.png`-Asset eingebunden und wird oben im dunklen App-Header angezeigt.
-
-
-### V5.14: Aktualisieren-Fix
-Der Aktualisieren-Button lädt nun auch eine aktive Ort-/Adresssuche erneut. Eine bestehende Suche wird nicht mehr durch die frühere `state.query`-Sperre blockiert.
-
-
-### V5.16: CNG / Erdgas
-CNG/Erdgas ist als dritter Kraftstoff integriert. Die App verwendet dafür den E-Control-Fuel-Type `GAS`. CNG funktioniert damit in Standortsuche, Ortssuche, Radius, geschlossenen Tankstellen, Favoriten, Preisverlauf und Preisalarmen.
-
-
-## Push V5.27
-- Push subscriptions werden beim App-Start erneut am Worker synchronisiert.
-- Stale VAPID-Subscriptions werden erkannt und bei erneuter Aktivierung neu angelegt.
-- Nur 404/410 werden automatisch als dauerhaft ungültige Push-Abos gelöscht; temporäre Zustellfehler bleiben erhalten.
-- Push-Test liefert Zustell-/Fehlerstatistik.
-- iOS-PWA Push bleibt an Home-Screen-Installation und sichtbare Notification im Service Worker gebunden.
-
-
-## V5.28 – RMC Kartenakzeptanz
-- RMC-Kennzeichnung auf Tankstellenkarten anhand des aktuellen RMC-Österreich-Stationsplans vom 10.02.2026.
-- Anzeige der RMC-Stationsnummer, wenn eine Tankstelle eindeutig über Adresse/PLZ zugeordnet werden kann.
-- RMC-Daten bleiben getrennt von E-Control-Spritpreisen.
-
-
-V5.30: RMC-Abgleich erweitert um die Salzburger Turmöl-Stationen 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
-
-V5.30: RMC-Abgleich erweitert um Turmöl 1433–1436 und tolerantere Straßen-/Adressnormalisierung.
-
-
-V5.34: RS-Logo aus dem Header entfernt und durch „Finde den besten Spritpreis in deiner Umgebung!“ ersetzt.
-
-
-## V5.46 Push-Diagnose
-- `/api/push/alarm-test` sendet einen Test mit exakt denselben Web-Push-Versandparametern wie der automatische Preisalarm.
-- `/api/alarms/status` enthält zusätzlich `lastPushTest`.
-- Automatische Preisalarme verwenden TTL 300 Sekunden und den gleichen Versandweg wie der funktionierende Test-Push.
+Im Projektverzeichnis `npm install` ausführen und danach `npx wrangler deploy`.
