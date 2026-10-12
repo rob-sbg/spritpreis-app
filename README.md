@@ -1,8 +1,9 @@
-# Spritpreis-App V5.48 – ohne RMC
+# Spritpreis-App V5.49 – RMC vollständig entfernt
 
-Diese Version entfernt die RMC-Kennzeichnung vollständig. In `public/index.html` und `src/index.js` befinden sich keine RMC-Badges, Hinweise oder Zuordnungslogik mehr.
+Dieses ZIP enthält die Projektdateien direkt im ZIP-Stammverzeichnis (kein zusätzlicher Projektordner).
 
-## Wichtig beim Deploy
-ZIP-Inhalt direkt in das Repository `rob-sbg/spritpreis-app` entpacken/hochladen – nicht den Ordner `v548` als zusätzliche Ebene deployen. `wrangler.jsonc` erwartet `src/index.js` und `public` im Projektstamm.
+1. Den gesamten ZIP-Inhalt ins Repository `rob-sbg/spritpreis-app` kopieren und bestehende Dateien überschreiben.
+2. Commit/Push durchführen und den Cloudflare-Deploy abwarten.
+3. In der App unten prüfen, ob `App-Version 5.49` angezeigt wird.
 
-Service-Worker-Version: 548. Nach dem Deploy die App einmal vollständig schließen und neu öffnen. Falls die alte Anzeige bleibt, auf dem iPhone die Home-Screen-App schließen, Safari-Website-Daten für die Worker-Domain löschen und die PWA erneut öffnen.
+Die ausgelieferte `public/index.html` enthält keine RMC-Badges oder RMC-Hinweise; `src/index.js` enthält keine RMC-Zuordnungslogik. Der Service Worker wird über `/sw.js?v=549` neu registriert und löscht alte Cache-Einträge beim Aktivieren.
